@@ -21,19 +21,21 @@ def log_baseline_model():
     with open("model/features.json", "r") as f:
         features = json.load(f)
         
-    print(f"✅ Model loaded")
+    print(f"  Model loaded")
     print(f"   RMSE : {metrics['rmse']} seconds")
     print(f"   MAE  : {metrics['mae']} seconds")
     print(f"   R²   : {metrics['r2']}")
     
     logger = MLflowLogger(
         experiment_name="Sentinel-AI",
-        tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5000")
+        tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
     )
     
     with logger.start_run(run_name="baseline_champion_v1"):
         logger.log_params(params)
         logger.log_metrics(metrics)
+        logger.log_artifact("model/features.json")
+        logger.log_artifact("model/feature_importance.csv")
         logger.log_params(
             {
                 "model_type": "LightGBM",

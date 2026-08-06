@@ -3,14 +3,15 @@ from pathlib import Path
 import pickle
 import mlflow
 import mlflow.lightgbm
-
+import os
+import tempfile
 from typing import Any
 
 class MLflowLogger:
     def __init__(
         self,
         experiment_name: str="Sentinel-AI",
-        tracking_uri: str ="http://localhost:5000",
+        tracking_uri = os.getenv("MLFLOW_TRACKING_URI")
         ):
         self.experiment_name = experiment_name
         self.tracking_uri = tracking_uri
@@ -31,16 +32,21 @@ class MLflowLogger:
     def log_model(self, model: Any):
         mlflow.lightgbm.log_model(
             lgb_model=model,
-            artifact_path=artifact_path
+            name = "model"
         )
     def log_artifact(self, path: str):
         mlflow.log_artifact(path)
         
-    def log_json(self, path: str):
-        path = Path(f"/tmp/{filename}")
-        with open(path,"w") as f:
-            json.dump(data, f, indent=2)
-        mlflow.log_artifact(path)
+    def log_json(self, data: dict, filename: str):
+        """Create a JSON file from a dictionary and log it as an MLflow artifact."""
+
+        temp_dir = Path(tempfile.gettempdir())
+        json_path = temp_dir / filename
+
+        with open(json_path, "w") as f:
+            json.dump(data, f, indent=4)
+
+        mlflow.log_artifact(str(json_path))
         
     def end_run(self):
         mlflow.end_run()
@@ -60,7 +66,7 @@ class MLflowLogger:
         model_version: str = "1"
     ):
         """Promote model version to Production stage"""
-        client = mlflow.tracking.MLflowClient()
+        client = mlflow.tracking.MlflowClient()
         client.transition_model_version_stage(
             name = model_name,
             version = model_version,
