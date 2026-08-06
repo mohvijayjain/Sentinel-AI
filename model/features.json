@@ -1,0 +1,13 @@
+[
+  "trip_distance",
+  "pickup_hour",
+  "pickup_day_of_week",
+  "pickup_month",
+  "is_weekend",
+  "is_rush_hour",
+  "PULocationID",
+  "DOLocationID",
+  "payment_type",
+  "VendorID",
+  "RatecodeID"
+]

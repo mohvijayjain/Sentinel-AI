@@ -1,0 +1,12 @@
+feature,importance
+DOLocationID,20771
+PULocationID,19437
+trip_distance,17332
+pickup_hour,12226
+pickup_day_of_week,7157
+RatecodeID,3278
+pickup_month,3136
+is_rush_hour,910
+payment_type,887
+VendorID,565
+is_weekend,224
