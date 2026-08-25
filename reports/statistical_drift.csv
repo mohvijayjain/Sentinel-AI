@@ -1,0 +1,11 @@
+feature,type,psi,ks_statistic,ks_pvalue,js_divergence,wasserstein,severity
+trip_distance,numerical,0.000804,0.010904,0.0,0.000101,0.012545,NO_DRIFT
+pickup_hour,numerical,0.000918,0.008785,0.0,0.000115,0.019562,NO_DRIFT
+pickup_day_of_week,numerical,0.012946,0.039595,0.0,0.001617,0.049192,NO_DRIFT
+is_weekend,numerical,0.0,0.018571,0.0,0.0,0.042099,NO_DRIFT
+is_rush_hour,numerical,0.0,0.000599,0.468115,0.0,0.001291,NO_DRIFT
+PULocationID,categorical,0.002748,,,0.000342,,NO_DRIFT
+DOLocationID,categorical,0.002009,,,0.000251,,NO_DRIFT
+payment_type,categorical,0.006565,,,0.000799,,NO_DRIFT
+VendorID,categorical,2.7e-05,,,3e-06,,NO_DRIFT
+RatecodeID,categorical,0.000702,,,8.8e-05,,NO_DRIFT

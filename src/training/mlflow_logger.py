@@ -3,6 +3,7 @@ from pathlib import Path
 import pickle
 import mlflow
 import mlflow.lightgbm
+from mlflow import MlflowClient
 import os
 import tempfile
 from typing import Any
@@ -15,6 +16,7 @@ class MLflowLogger:
         ):
         self.experiment_name = experiment_name
         self.tracking_uri = tracking_uri
+        self.client = MlflowClient()
         
         mlflow.set_tracking_uri(tracking_uri)
         mlflow.set_experiment(experiment_name)
@@ -51,6 +53,18 @@ class MLflowLogger:
     def end_run(self):
         mlflow.end_run()
     
+    def set_champions(
+        self,
+        model_name: str,
+        model_version: str
+    ):
+        """Assign the champion alias to a registered model version"""
+        self.client.set_registered_model_alias(
+            name=model_name,
+            alias="Champion",
+            version=model_version,
+        )
+    
     def register_model(
         self,
         run_id: str,
@@ -60,19 +74,6 @@ class MLflowLogger:
         model_uri = f"runs:/{run_id}/model"
         mv = mlflow.register_model(model_uri, model_name)
         return mv.version
-    def promote_to_production(
-        self,
-        model_name: str = "sentinel-ai-champion",
-        model_version: str = "1"
-    ):
-        """Promote model version to Production stage"""
-        client = mlflow.tracking.MlflowClient()
-        client.transition_model_version_stage(
-            name = model_name,
-            version = model_version,
-            stage = "Production",
-            archive_existing_version=True
-        )
         print(f"Model v{model_version} promoted to Production")
         
     

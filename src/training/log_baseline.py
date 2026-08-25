@@ -62,16 +62,16 @@ def log_baseline_model():
         run_id=run_id,
         model_name = "sentinel-ai-champion"
     )
-    
-    logger.promote_to_production(
+    logger.set_champions(
         model_name="sentinel-ai-champion",
         model_version=version
     )
+    
     print(f"\n🎉 Baseline model successfully logged to MLflow!")
-    print(f"   Experiment: Sentinel-AI")
-    print(f"   Run ID:     {run_id}")
-    print(f"   Version:    {version}")
-    print(f"   Stage:      Production")
+    print(f"Experiment: Sentinel-AI")
+    print(f"Run ID: {run_id}")
+    print(f"Version: {version}")
+    print(f"Stage: Production")
     print(f"\n→ Check: http://localhost:5000")
 
 if __name__ == "__main__":

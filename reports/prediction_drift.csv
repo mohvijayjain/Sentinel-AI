@@ -1,0 +1,2 @@
+psi,ks_statistic,ks_pvalue,js_divergence,wasserstein,severity
+0.001239,0.007391,2.1872152720670027e-95,0.000155,15.600924,NO_DRIFT
