@@ -2,7 +2,7 @@ import pandas as pd
 import json
 import os
 
-from src.database.drift_repository import insert_monitoring_run
+from src.database.drift_repository import (insert_monitoring_run, insert_drift_scores)
 
 
 # ============================================================
@@ -227,6 +227,9 @@ if __name__ == "__main__":
             f,
             indent=4
         )
+        
+    statistical_df = pd.read_csv(STATISTICAL_PATH)
+    insert_drift_scores(statistical_df)
     
     insert_monitoring_run(
     statistical_score=statistical_score,

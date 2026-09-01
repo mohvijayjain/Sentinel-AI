@@ -8,12 +8,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from prometheus_fastapi_instrumentator import Instrumentator
 
+
 from datetime import datetime
 from contextlib import asynccontextmanager
 
 from .lifespan import lifespan
 from .routes import router
 from .logger import logger
+
+from src.api.routes.monitoring import router as monitoring_router
 
 
 
@@ -36,6 +39,9 @@ app.add_middleware(
 Instrumentator().instrument(app).expose(app)
 
 app.include_router(router)
+app.include_router(
+    monitoring_router
+)
 
 model = None
 features = None

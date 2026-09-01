@@ -37,7 +37,7 @@ def insert_drift_scores(
                 {
                     "feature_name": row["feature"],
                     "psi_score": row["psi"],
-                    "is_drifted": row["is_drifted"]
+                    "is_drifted": row["severity"] != "NO_DRIFT"
                 }
             )
 
@@ -152,3 +152,74 @@ def insert_monitoring_run(
         )
 
     print("✅ Monitoring run saved")
+    
+    
+def get_latest_monitoring_run():
+
+    query = text("""
+        SELECT *
+        FROM monitoring_runs
+        ORDER BY run_time DESC
+        LIMIT 1
+    """)
+
+    with engine.connect() as conn:
+        result = conn.execute(query)
+
+        return result.fetchone()
+
+
+
+def get_monitoring_history(limit=20):
+
+    query = text("""
+        SELECT *
+        FROM monitoring_runs
+        ORDER BY run_time DESC
+        LIMIT :limit
+    """)
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            query,
+            {
+                "limit": limit
+            }
+        )
+
+        return result.fetchall()
+
+
+
+def get_drifted_features():
+
+    query = text("""
+        SELECT *
+        FROM drift_scores
+        WHERE is_drifted = true
+        ORDER BY psi_score DESC
+    """)
+
+
+    with engine.connect() as conn:
+
+        result = conn.execute(query)
+
+        return result.fetchall()
+
+
+
+def get_feature_drift_scores():
+
+    query = text("""
+        SELECT *
+        FROM drift_scores
+        ORDER BY psi_score DESC
+    """)
+
+
+    with engine.connect() as conn:
+
+        result = conn.execute(query)
+
+        return result.fetchall()
