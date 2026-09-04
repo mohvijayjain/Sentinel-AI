@@ -1,42 +1,23 @@
-import os
-import json
-import pickle
+import logging
+
+import lightgbm as lgb
+import mlflow
 import pandas as pd
+from sqlalchemy import text
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
-from lightgbm import LGBMRegressor
-
-from src.ingestion.preprocess import clean_and_engineer
+from src.database.postgres import engine
+from src.ingestion.preprocess import FEATURES
 from src.training.mlflow_logger import MLflowLogger
 
-
-# ============================================================
-# Configuration
-# ============================================================
-
-RAW_DIR = "data/raw"
-MODEL_DIR = "model"
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logger = logging.getLogger(__name__)
 
 TARGET = "trip_duration"
+KEY_COLUMN = "trip_id"        # <-- set to your table's stable primary key
+TEST_BUCKET_CUTOFF = 80       # buckets 0-79 train, 80-99 test (~20% holdout)
 
-FEATURES = [
-    "trip_distance",
-    "pickup_hour",
-    "pickup_day_of_week",
-    "pickup_month",
-    "is_weekend",
-    "is_rush_hour",
-    "PULocationID",
-    "DOLocationID",
-    "payment_type",
-    "VendorID",
-    "RatecodeID",
-]
-
-# Best parameters obtained from previous Optuna search.
-# We DO NOT run Optuna again during automatic retraining.
-BEST_PARAMS = {
+MODEL_PARAMS = {
     "n_estimators": 957,
     "learning_rate": 0.29707317286046714,
     "max_depth": 7,
@@ -52,374 +33,93 @@ BEST_PARAMS = {
 }
 
 
-# ============================================================
-# 1. Load training data
-# ============================================================
+def load_training_data() -> pd.DataFrame:
+    """Load features + target from PostgreSQL with a deterministic train/test bucket.
 
-def load_training_data():
+    The bucket is derived from a hash of the primary key, so a given row is
+    ALWAYS in the same split regardless of row order or table growth. The
+    comparison file must use the identical predicate to score the champion.
+    """
+    logger.info("Loading training data from PostgreSQL...")
 
-    print("\n" + "=" * 60)
-    print("LOADING RETRAINING DATA")
-    print("=" * 60)
+    columns = ", ".join(FEATURES + [TARGET])
+    query = f"""
+        SELECT {columns},
+            abs(hashtext({KEY_COLUMN}::text)) % 100 AS _bucket
+        FROM taxi_trips
+    """
 
-    paths = [
-        f"{RAW_DIR}/yellow_tripdata_2026-01.parquet",
-        f"{RAW_DIR}/yellow_tripdata_2026-02.parquet",
-        f"{RAW_DIR}/yellow_tripdata_2026-03.parquet",
-    ]
+    df = pd.read_sql(text(query), engine)
+    logger.info("Loaded %s rows", f"{len(df):,}")
 
-    dfs = []
-
-    for path in paths:
-
-        print(f"Loading: {path}")
-
-        if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"Training data not found: {path}"
-            )
-
-        df = pd.read_parquet(path)
-
-        print(f"Rows: {len(df):,}")
-
-        dfs.append(df)
-
-    df = pd.concat(dfs, ignore_index=True)
-
-    print(f"\nTotal raw rows: {len(df):,}")
+    missing = [c for c in FEATURES + [TARGET] if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns from query: {missing}")
 
     return df
 
 
-# ============================================================
-# 2. Preprocess
-# ============================================================
+def split_data(df: pd.DataFrame):
+    """Deterministic split by frozen hash bucket (no random shuffle)."""
+    train_df = df[df["_bucket"] < TEST_BUCKET_CUTOFF]
+    test_df = df[df["_bucket"] >= TEST_BUCKET_CUTOFF]
 
-def preprocess_data(df):
+    X_train = train_df[FEATURES]
+    y_train = train_df[TARGET]
+    X_test = test_df[FEATURES]
+    y_test = test_df[TARGET]
 
-    print("\n" + "=" * 60)
-    print("PREPROCESSING")
-    print("=" * 60)
+    logger.info("Training rows: %s", f"{len(X_train):,}")
+    logger.info("Test rows:     %s", f"{len(X_test):,}")
 
-    # IMPORTANT:
-    # Reuse the exact preprocessing pipeline used by
-    # the original model.
+    if len(X_test) == 0 or len(X_train) == 0:
+        raise ValueError("Empty train or test split — check KEY_COLUMN and data volume.")
 
-    df = clean_and_engineer(
-        df,
-        month_name="Retraining"
-    )
-
-    missing_features = [
-        feature
-        for feature in FEATURES
-        if feature not in df.columns
-    ]
-
-    if missing_features:
-        raise ValueError(
-            f"Missing features after preprocessing: "
-            f"{missing_features}"
-        )
-
-    X = df[FEATURES]
-    y = df[TARGET]
-
-    print(f"\nX shape: {X.shape}")
-    print(f"y shape: {y.shape}")
-
-    print("\nFeatures:")
-    for feature in FEATURES:
-        print(f"  - {feature}")
-
-    return X, y
+    return X_train, y_train, X_test, y_test
 
 
-# ============================================================
-# 3. Train model
-# ============================================================
-
-def train_model(X_train, y_train):
-
-    print("\n" + "=" * 60)
-    print("TRAINING LIGHTGBM")
-    print("=" * 60)
-
-    print("\nUsing parameters:")
-    for key, value in BEST_PARAMS.items():
-        print(f"  {key}: {value}")
-
-    model = LGBMRegressor(**BEST_PARAMS)
-
-    model.fit(
-        X_train,
-        y_train
-    )
-
-    print("\n✅ Training complete")
-
+def train_model(X_train, y_train) -> lgb.LGBMRegressor:
+    logger.info("Training challenger model...")
+    model = lgb.LGBMRegressor(**MODEL_PARAMS)
+    model.fit(X_train, y_train)
     return model
 
 
-# ============================================================
-# 4. Evaluate model
-# ============================================================
-
-def evaluate_model(model, X_test, y_test):
-
-    print("\n" + "=" * 60)
-    print("MODEL EVALUATION")
-    print("=" * 60)
-
+def evaluate_model(model, X_test, y_test) -> dict:
     predictions = model.predict(X_test)
-
-    rmse = mean_squared_error(
-        y_test,
-        predictions
-    ) ** 0.5
-
-    mae = mean_absolute_error(
-        y_test,
-        predictions
-    )
-
-    r2 = r2_score(
-        y_test,
-        predictions
-    )
-
-    metrics = {
-        "rmse": float(rmse),
-        "mae": float(mae),
-        "r2": float(r2),
-    }
-
-    print(f"\nRMSE: {rmse:.4f}")
-    print(f"MAE:  {mae:.4f}")
-    print(f"R²:   {r2:.4f}")
-
-    return metrics
-
-
-# ============================================================
-# 5. Save model artifacts
-# ============================================================
-
-def save_artifacts(model, metrics):
-
-    print("\n" + "=" * 60)
-    print("SAVING MODEL ARTIFACTS")
-    print("=" * 60)
-
-    os.makedirs(MODEL_DIR, exist_ok=True)
-
-    # Model
-    model_path = os.path.join(
-        MODEL_DIR,
-        "model_retrained.pkl"
-    )
-
-    with open(model_path, "wb") as f:
-        pickle.dump(model, f)
-
-    print(f"✅ Model saved: {model_path}")
-
-    # Parameters
-    params_path = os.path.join(
-        MODEL_DIR,
-        "best_params_retrained.json"
-    )
-
-    with open(params_path, "w") as f:
-        json.dump(
-            BEST_PARAMS,
-            f,
-            indent=4
-        )
-
-    print(f"✅ Parameters saved: {params_path}")
-
-    # Metrics
-    metrics_path = os.path.join(
-        MODEL_DIR,
-        "metrics_retrained.json"
-    )
-
-    with open(metrics_path, "w") as f:
-        json.dump(
-            metrics,
-            f,
-            indent=4
-        )
-
-    print(f"✅ Metrics saved: {metrics_path}")
-
-    # Features
-    features_path = os.path.join(
-        MODEL_DIR,
-        "features_retrained.json"
-    )
-
-    with open(features_path, "w") as f:
-        json.dump(
-            FEATURES,
-            f,
-            indent=4
-        )
-
-    print(f"✅ Features saved: {features_path}")
-
     return {
-        "model": model_path,
-        "params": params_path,
-        "metrics": metrics_path,
-        "features": features_path,
+        "rmse": float(mean_squared_error(y_test, predictions) ** 0.5),
+        "mae": float(mean_absolute_error(y_test, predictions)),
+        "r2": float(r2_score(y_test, predictions)),
     }
 
 
-# ============================================================
-# 6. Main retraining pipeline
-# ============================================================
-
-def retrain():
-
-    print("\n")
-    print("=" * 70)
-    print("              SENTINEL AI - RETRAINING PIPELINE")
-    print("=" * 70)
-
-    # --------------------------------------------------------
-    # Load data
-    # --------------------------------------------------------
-
+def main() -> dict:
     df = load_training_data()
+    X_train, y_train, X_test, y_test = split_data(df)
 
-    # --------------------------------------------------------
-    # Preprocess
-    # --------------------------------------------------------
+    model = train_model(X_train, y_train)
+    metrics = evaluate_model(model, X_test, y_test)
 
-    X, y = preprocess_data(df)
+    logger.info("Challenger metrics | RMSE: %.4f | MAE: %.4f | R2: %.4f",
+                metrics["rmse"], metrics["mae"], metrics["r2"])
 
-    # --------------------------------------------------------
-    # Train/test split
-    # --------------------------------------------------------
+    ml_logger = MLflowLogger(experiment_name="Sentinel-AI")
+    run_id = None
+    try:
+        ml_logger.start_run(run_name="Challenger")
+        run_id = mlflow.active_run().info.run_id
+        ml_logger.log_params(MODEL_PARAMS)
+        ml_logger.log_metrics(metrics)
+        ml_logger.log_model(model)
+    finally:
+        ml_logger.end_run()
 
-    print("\n" + "=" * 60)
-    print("TRAIN / TEST SPLIT")
-    print("=" * 60)
+    logger.info("Challenger logged to MLflow | run_id=%s", run_id)
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.2,
-        random_state=42
-    )
+    # Returned so the comparison file can locate THIS challenger by run_id.
+    return {"run_id": run_id, "metrics": metrics, "model": model}
 
-    print(f"Training rows: {len(X_train):,}")
-    print(f"Testing rows:  {len(X_test):,}")
-
-    # --------------------------------------------------------
-    # Train
-    # --------------------------------------------------------
-
-    model = train_model(
-        X_train,
-        y_train
-    )
-
-    # --------------------------------------------------------
-    # Evaluate
-    # --------------------------------------------------------
-
-    metrics = evaluate_model(
-        model,
-        X_test,
-        y_test
-    )
-
-    # --------------------------------------------------------
-    # Save artifacts
-    # --------------------------------------------------------
-
-    artifacts = save_artifacts(
-        model,
-        metrics
-    )
-
-    # --------------------------------------------------------
-    # MLflow
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("LOGGING TO MLFLOW")
-    print("=" * 60)
-
-    logger = MLflowLogger(
-        experiment_name="Sentinel-AI"
-    )
-
-    with logger.start_run(
-        run_name="automatic-retraining"
-    ):
-
-        # Parameters
-        logger.log_params(
-            BEST_PARAMS
-        )
-
-        # Metrics
-        logger.log_metrics(
-            metrics
-        )
-
-        # Artifacts
-        logger.log_artifact(
-            artifacts["params"]
-        )
-
-        logger.log_artifact(
-            artifacts["metrics"]
-        )
-
-        logger.log_artifact(
-            artifacts["features"]
-        )
-
-        # Model
-        logger.log_model(
-            model,
-            artifact_path="model"
-        )
-
-    print("\n✅ MLflow logging complete")
-
-    # --------------------------------------------------------
-    # Final result
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 70)
-    print("              RETRAINING COMPLETE")
-    print("=" * 70)
-
-    return {
-        "metrics": metrics,
-        "artifacts": artifacts,
-    }
-
-
-# ============================================================
-# Entry point
-# ============================================================
 
 if __name__ == "__main__":
-
-    result = retrain()
-
-    print("\nFinal metrics:")
-    print(
-        json.dumps(
-            result["metrics"],
-            indent=4
-        )
-    )
+    main()
