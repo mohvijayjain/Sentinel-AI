@@ -63,14 +63,31 @@ def create_target(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # ── Step 3: Feature Engineering ───────────────────────
-def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
-    df["pickup_hour"]        = df["tpep_pickup_datetime"].dt.hour
-    df["pickup_day_of_week"] = df["tpep_pickup_datetime"].dt.dayofweek
-    df["pickup_month"]       = df["tpep_pickup_datetime"].dt.month
-    df["is_weekend"]         = df["pickup_day_of_week"].isin([5, 6]).astype(int)
-    df["is_rush_hour"]       = df["pickup_hour"].isin(
-                                [7, 8, 9, 17, 18, 19]
-                            ).astype(int)
+def engineer_features(df):
+    """
+    Create time-based features from pickup datetime.
+
+    Shared by:
+    - Training
+    - Serving
+    """
+
+    df = df.copy()
+
+    pickup = df["tpep_pickup_datetime"]
+
+    df["pickup_hour"] = pickup.dt.hour
+    df["pickup_day_of_week"] = pickup.dt.dayofweek
+    df["pickup_month"] = pickup.dt.month
+
+    df["is_weekend"] = (
+        df["pickup_day_of_week"].isin([5, 6]).astype("int8")
+    )
+
+    df["is_rush_hour"] = (
+        df["pickup_hour"].isin([7, 8, 9, 17, 18, 19]).astype("int8")
+    )
+
     return df
 
 # ── Step 4: Remove Outliers ────────────────────────────
@@ -140,7 +157,7 @@ def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Master Clean Function ──────────────────────────────
 def clean_and_engineer(df: pd.DataFrame, month_name: str = "") -> pd.DataFrame:
-
+    df.columns = df.columns.str.lower()
     print(f"\n{'='*45}")
     print(f"  Processing {month_name}")
     print(f"{'='*45}")
@@ -161,7 +178,6 @@ def clean_and_engineer(df: pd.DataFrame, month_name: str = "") -> pd.DataFrame:
     print(f"  Avg duration:     {df['trip_duration'].mean()/60:.1f} minutes")
     print(f"  Features:         {list(df.columns)}")
 
-    df.columns = df.columns.str.lower()
 
     return df
 
