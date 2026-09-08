@@ -1,8 +1,7 @@
+# src/training/retrain.py
+
 import logging
 
-# Loaded before the MLflow import: MLflowLogger reads MLFLOW_TRACKING_URI at
-# import time. This used to happen as a side effect of importing
-# src.database.postgres, which no longer belongs in the training path.
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,9 +10,15 @@ import lightgbm as lgb
 import mlflow
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+)
 
 from src.ingestion.preprocess import FEATURES
+
 from src.training.dataset import (
     ROW_KEY,
     SEED,
@@ -21,17 +26,32 @@ from src.training.dataset import (
     load_frozen_test,
     load_rows_by_key,
 )
+
 from src.training.mlflow_logger import MLflowLogger
 
 
+# ============================================================
+# Logging
+# ============================================================
+
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
+    format="%(asctime)s | %(levelname)s | %(message)s",
 )
 
 logger = logging.getLogger(__name__)
 
+
+# ============================================================
+# Configuration
+# ============================================================
+
 TARGET = "trip_duration"
+
+EXPERIMENT_NAME = "Sentinel-AI"
+
+SAMPLE_SIZE = 1_000_000
+
 
 MODEL_PARAMS = {
     "n_estimators": 957,
@@ -49,54 +69,79 @@ MODEL_PARAMS = {
 }
 
 
-SAMPLE_SIZE = 1_000_000
-
+# ============================================================
+# Load Training Data
+# ============================================================
 
 def load_training_data() -> pd.DataFrame:
     """
     Load a bounded training sample from processed Parquet.
 
-    Rows belonging to data/frozen_test.parquet are excluded BEFORE sampling,
-    so the training sample and the evaluation set are disjoint by
-    construction. main() then proves it.
-
-    PostgreSQL is no longer queried here; it remains responsible for
-    monitoring runs, drift scores and model decision metadata.
+    Frozen-test rows are excluded before sampling.
     """
 
     logger.info(
-        "Loading %s-row training sample from processed Parquet...",
-        f"{SAMPLE_SIZE:,}"
+        "Loading %s-row training sample...",
+        f"{SAMPLE_SIZE:,}",
     )
 
     all_keys = load_all_row_keys()
-    test_keys = load_frozen_test()[ROW_KEY].to_numpy(dtype=np.int64)
 
-    logger.info("Corpus rows:      %s", f"{len(all_keys):,}")
-    logger.info("Frozen test rows: %s", f"{len(test_keys):,}")
+    test_keys = load_frozen_test()[
+        ROW_KEY
+    ].to_numpy(
+        dtype=np.int64
+    )
 
-    candidates = all_keys[~np.isin(all_keys, test_keys, assume_unique=True)]
+    logger.info(
+        "Corpus rows: %s",
+        f"{len(all_keys):,}",
+    )
+
+    logger.info(
+        "Frozen test rows: %s",
+        f"{len(test_keys):,}",
+    )
+
+    candidates = all_keys[
+        ~np.isin(
+            all_keys,
+            test_keys,
+            assume_unique=True,
+        )
+    ]
 
     if len(candidates) < SAMPLE_SIZE:
         raise ValueError(
-            f"Only {len(candidates):,} rows available outside the frozen "
-            f"test set, need {SAMPLE_SIZE:,}."
+            f"Only {len(candidates):,} rows available "
+            f"outside frozen test set; "
+            f"need {SAMPLE_SIZE:,}."
         )
 
-    rng = np.random.default_rng(SEED)
-
-    train_keys = np.sort(
-        rng.choice(candidates, size=SAMPLE_SIZE, replace=False)
+    rng = np.random.default_rng(
+        SEED
     )
 
-    df = load_rows_by_key(train_keys)
+    train_keys = np.sort(
+        rng.choice(
+            candidates,
+            size=SAMPLE_SIZE,
+            replace=False,
+        )
+    )
+
+    df = load_rows_by_key(
+        train_keys
+    )
 
     logger.info(
         "Loaded %s rows",
-        f"{len(df):,}"
+        f"{len(df):,}",
     )
 
-    required_columns = FEATURES + [TARGET]
+    required_columns = (
+        FEATURES + [TARGET]
+    )
 
     missing = [
         column
@@ -106,75 +151,122 @@ def load_training_data() -> pd.DataFrame:
 
     if missing:
         raise ValueError(
-            f"Missing required columns from processed Parquet: {missing}"
+            f"Missing required columns: {missing}"
         )
 
-    logger.info("Training columns:")
-    logger.info("%s", required_columns)
+    return df[
+        required_columns + [ROW_KEY]
+    ]
 
-    return df[required_columns + [ROW_KEY]]
 
+# ============================================================
+# Leakage Check
+# ============================================================
 
-def assert_disjoint(train_df: pd.DataFrame, test_df: pd.DataFrame) -> None:
-    """
-    Prove the training sample shares no row with the frozen test set.
+def assert_disjoint(
+    train_df: pd.DataFrame,
+    test_df: pd.DataFrame,
+) -> None:
 
-    Reproducibility is not sufficient - a reproducible split can still leak.
-    This fails loudly, before any model is trained or logged to MLflow.
-    """
+    train_keys = train_df[
+        ROW_KEY
+    ].to_numpy(
+        dtype=np.int64
+    )
 
-    train_keys = train_df[ROW_KEY].to_numpy(dtype=np.int64)
-    test_keys = test_df[ROW_KEY].to_numpy(dtype=np.int64)
+    test_keys = test_df[
+        ROW_KEY
+    ].to_numpy(
+        dtype=np.int64
+    )
 
-    overlap = np.intersect1d(train_keys, test_keys)
+    overlap = np.intersect1d(
+        train_keys,
+        test_keys,
+    )
 
-    logger.info("Training rows:    %s", f"{len(train_keys):,}")
-    logger.info("Frozen test rows: %s", f"{len(test_keys):,}")
-    logger.info("Overlap:          %s", f"{len(overlap):,}")
+    logger.info(
+        "Training rows: %s",
+        f"{len(train_keys):,}",
+    )
+
+    logger.info(
+        "Frozen test rows: %s",
+        f"{len(test_keys):,}",
+    )
+
+    logger.info(
+        "Overlap: %s",
+        f"{len(overlap):,}",
+    )
 
     if len(overlap):
+
         raise ValueError(
-            f"LEAKAGE: {len(overlap):,} rows appear in BOTH the training "
-            "sample and data/frozen_test.parquet. Refusing to train or log. "
-            f"First offending row_keys: {overlap[:10].tolist()}"
+            f"LEAKAGE: {len(overlap):,} rows "
+            "appear in both training and frozen test."
         )
 
 
-def train_model(X_train, y_train) -> lgb.LGBMRegressor:
-    """Train a fresh Challenger model."""
+# ============================================================
+# Train
+# ============================================================
 
-    logger.info("Training Challenger model...")
+def train_model(
+    X_train,
+    y_train,
+) -> lgb.LGBMRegressor:
 
-    model = lgb.LGBMRegressor(**MODEL_PARAMS)
+    logger.info(
+        "Training Challenger model..."
+    )
+
+    model = lgb.LGBMRegressor(
+        **MODEL_PARAMS
+    )
 
     model.fit(
         X_train,
-        y_train
+        y_train,
     )
 
-    logger.info("Challenger training completed.")
+    logger.info(
+        "Challenger training completed."
+    )
 
     return model
 
 
-def evaluate_model(model, X_test, y_test) -> dict:
-    """Evaluate Challenger using RMSE, MAE and R²."""
+# ============================================================
+# Evaluate
+# ============================================================
 
-    predictions = model.predict(X_test)
+def evaluate_model(
+    model,
+    X_test,
+    y_test,
+) -> dict:
 
-    rmse = mean_squared_error(
-        y_test,
-        predictions
-    ) ** 0.5
+    predictions = model.predict(
+        X_test
+    )
+
+    rmse = (
+        mean_squared_error(
+            y_test,
+            predictions,
+        )
+        ** 0.5
+    )
 
     mae = mean_absolute_error(
         y_test,
-        predictions
+        predictions,
     )
 
     r2 = r2_score(
         y_test,
-        predictions
+        predictions,
     )
 
     return {
@@ -184,98 +276,180 @@ def evaluate_model(model, X_test, y_test) -> dict:
     }
 
 
-def log_challenger(model, metrics: dict):
-    """Log Challenger model and metrics to MLflow."""
+# ============================================================
+# Log Challenger
+# ============================================================
+
+def log_challenger(
+    model,
+    metrics: dict,
+):
 
     ml_logger = MLflowLogger(
-        experiment_name="Sentinel-AI"
+        experiment_name=EXPERIMENT_NAME
     )
 
     run_id = None
 
     try:
+
         ml_logger.start_run(
             run_name="Challenger"
         )
 
-        run_id = mlflow.active_run().info.run_id
+        run_id = (
+            mlflow.active_run()
+            .info.run_id
+        )
+
+        logger.info(
+            "MLflow run started: %s",
+            run_id,
+        )
+
+        # --------------------------------------------
+        # Params
+        # --------------------------------------------
 
         ml_logger.log_params(
             MODEL_PARAMS
         )
 
+        # --------------------------------------------
+        # Metrics
+        # --------------------------------------------
+
         ml_logger.log_metrics(
             metrics
         )
 
-        ml_logger.log_model(
-            model
+        # --------------------------------------------
+        # Model
+        # --------------------------------------------
+
+        model_uri = (
+            ml_logger.log_model(
+                model
+            )
         )
 
+        logger.info(
+            "Challenger model URI: %s",
+            model_uri,
+        )
+
+        # --------------------------------------------
+        # Verify artifact exists
+        # --------------------------------------------
+
+        artifacts = mlflow.MlflowClient().list_artifacts(
+            run_id,
+            "model",
+        )
+
+        if not artifacts:
+
+            raise RuntimeError(
+                "MLflow model artifact verification failed. "
+                "The 'model' artifact directory is empty."
+            )
+
+        logger.info(
+            "MLflow model artifact verified."
+        )
+
+        for artifact in artifacts:
+
+            logger.info(
+                "Artifact: %s",
+                artifact.path,
+            )
+
     finally:
+
         ml_logger.end_run()
 
     logger.info(
-        "Challenger logged to MLflow | run_id=%s",
-        run_id
+        "Challenger logged successfully | run_id=%s",
+        run_id,
     )
 
     return run_id
 
 
+# ============================================================
+# Main
+# ============================================================
+
 def main() -> dict:
 
-    # --------------------------------------------------
-    # 1. Load processed data
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # 1. Training data
+    # --------------------------------------------------------
 
     train_df = load_training_data()
 
-    # --------------------------------------------------
-    # 2. Load THE frozen evaluation set + prove disjoint
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # 2. Frozen test
+    # --------------------------------------------------------
 
     test_df = load_frozen_test()
 
-    assert_disjoint(train_df, test_df)
+    assert_disjoint(
+        train_df,
+        test_df,
+    )
 
-    X_train, y_train = train_df[FEATURES], train_df[TARGET]
-    X_test, y_test = test_df[FEATURES], test_df[TARGET]
+    X_train = train_df[
+        FEATURES
+    ]
 
-    # --------------------------------------------------
-    # 3. Train fresh Challenger
-    # --------------------------------------------------
+    y_train = train_df[
+        TARGET
+    ]
+
+    X_test = test_df[
+        FEATURES
+    ]
+
+    y_test = test_df[
+        TARGET
+    ]
+
+    # --------------------------------------------------------
+    # 3. Train
+    # --------------------------------------------------------
 
     model = train_model(
         X_train,
-        y_train
+        y_train,
     )
 
-    # --------------------------------------------------
-    # 4. Evaluate Challenger
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # 4. Evaluate
+    # --------------------------------------------------------
 
     metrics = evaluate_model(
         model,
         X_test,
-        y_test
+        y_test,
     )
 
     logger.info(
         "Challenger metrics | "
-        "RMSE: %.4f | MAE: %.4f | R2: %.4f",
+        "RMSE=%.4f | MAE=%.4f | R2=%.4f",
         metrics["rmse"],
         metrics["mae"],
         metrics["r2"],
     )
 
-    # --------------------------------------------------
-    # 5. Log Challenger to MLflow
-    # --------------------------------------------------
+    # --------------------------------------------------------
+    # 5. MLflow
+    # --------------------------------------------------------
 
     run_id = log_challenger(
         model,
-        metrics
+        metrics,
     )
 
     return {
@@ -284,6 +458,10 @@ def main() -> dict:
         "model": model,
     }
 
+
+# ============================================================
+# CLI
+# ============================================================
 
 if __name__ == "__main__":
     main()

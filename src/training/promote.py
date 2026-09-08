@@ -8,9 +8,15 @@ from typing import Dict, Tuple
 import mlflow
 import mlflow.lightgbm
 import pandas as pd
+
 from dotenv import load_dotenv
 from mlflow import MlflowClient
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+from sklearn.metrics import (
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+)
 
 from src.training.dataset import load_frozen_test
 
@@ -22,9 +28,11 @@ from src.training.dataset import load_frozen_test
 load_dotenv()
 
 MODEL_NAME = "sentinel-ai-champion"
+
 CHAMPION_ALIAS = "Champion"
 
-# Challenger must improve RMSE by at least 1%
+EXPERIMENT_NAME = "Sentinel-AI"
+
 RMSE_IMPROVEMENT_THRESHOLD = 0.01
 
 
@@ -32,21 +40,34 @@ RMSE_IMPROVEMENT_THRESHOLD = 0.01
 # Logging
 # ============================================================
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
 
 # ============================================================
-# MLflow Configuration
+# MLflow
 # ============================================================
 
-TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
+TRACKING_URI = os.getenv(
+    "MLFLOW_TRACKING_URI"
+)
 
 if not TRACKING_URI:
-    raise RuntimeError("MLFLOW_TRACKING_URI is not set")
+    raise RuntimeError(
+        "MLFLOW_TRACKING_URI is not set"
+    )
 
-mlflow.set_tracking_uri(TRACKING_URI)
+mlflow.set_tracking_uri(
+    TRACKING_URI
+)
 
-client = MlflowClient()
+client = MlflowClient(
+    tracking_uri=TRACKING_URI
+)
 
 
 # ============================================================
@@ -57,7 +78,7 @@ Metrics = Dict[str, float]
 
 
 # ============================================================
-# Model Evaluation
+# Evaluate
 # ============================================================
 
 def evaluate_model(
@@ -67,32 +88,111 @@ def evaluate_model(
     """
     Evaluate a model on the frozen test dataset.
 
-    Metrics:
-        RMSE - lower is better
-        MAE  - lower is better
-        R2   - higher is better
+    The evaluation automatically aligns the frozen-test columns
+    with the exact feature names expected by the loaded model.
     """
 
     logger.info(
-        "Evaluating model on frozen test set: %d rows",
+        "Evaluating model on %d frozen-test rows",
         len(test_df),
     )
 
     if "trip_duration" not in test_df.columns:
         raise ValueError(
-            "Frozen test dataset does not contain target column "
+            "Frozen test dataset does not contain "
             "'trip_duration'"
         )
 
-    X = test_df.drop(columns=["trip_duration"])
     y = test_df["trip_duration"]
 
-    predictions = model.predict(X)
+    X = test_df.drop(
+        columns=[
+            "trip_duration",
+            "row_key",
+        ],
+        errors="ignore",
+    ).copy()
 
-    rmse = mean_squared_error(
-        y,
-        predictions,
-    ) ** 0.5
+    if not hasattr(model, "feature_name_"):
+        raise ValueError(
+            "Loaded model does not expose "
+            "LightGBM feature_name_"
+        )
+
+    model_features = list(
+        model.feature_name_
+    )
+
+    logger.info(
+        "Model expects features: %s",
+        model_features,
+    )
+
+    # --------------------------------------------------------
+    # Case-insensitive feature alignment
+    # --------------------------------------------------------
+
+    column_lookup = {
+        column.lower(): column
+        for column in X.columns
+    }
+
+    missing_features = []
+
+    selected_columns = []
+
+    for feature in model_features:
+
+        source_column = column_lookup.get(
+            feature.lower()
+        )
+
+        if source_column is None:
+            missing_features.append(
+                feature
+            )
+        else:
+            selected_columns.append(
+                source_column
+            )
+
+    if missing_features:
+        raise ValueError(
+            f"Missing model features: "
+            f"{missing_features}"
+        )
+
+    X = X[
+        selected_columns
+    ].copy()
+
+    # Rename to EXACT model feature names
+    X.columns = model_features
+
+    logger.info(
+        "Feature alignment successful: %d features",
+        len(X.columns),
+    )
+
+    # --------------------------------------------------------
+    # Prediction
+    # --------------------------------------------------------
+
+    predictions = model.predict(
+        X
+    )
+
+    # --------------------------------------------------------
+    # Metrics
+    # --------------------------------------------------------
+
+    rmse = (
+        mean_squared_error(
+            y,
+            predictions,
+        )
+        ** 0.5
+    )
 
     mae = mean_absolute_error(
         y,
@@ -111,7 +211,7 @@ def evaluate_model(
     }
 
     logger.info(
-        "Evaluation complete | RMSE=%.4f | MAE=%.4f | R2=%.4f",
+        "Metrics | RMSE=%.4f | MAE=%.4f | R2=%.4f",
         metrics["rmse"],
         metrics["mae"],
         metrics["r2"],
@@ -125,65 +225,58 @@ def evaluate_model(
 # ============================================================
 
 def load_champion() -> Tuple[object, str]:
-    """
-    Load the model currently assigned to the Champion alias.
-
-    Returns:
-        model
-        champion_version
-    """
 
     logger.info(
-        "Looking up Champion model: %s @ %s",
-        MODEL_NAME,
-        CHAMPION_ALIAS,
+        "Looking up Champion alias"
     )
 
     try:
-        champion_version = client.get_model_version_by_alias(
-            MODEL_NAME,
-            CHAMPION_ALIAS,
+
+        champion_version = (
+            client.get_model_version_by_alias(
+                MODEL_NAME,
+                CHAMPION_ALIAS,
+            )
         )
 
     except Exception as exc:
-        logger.exception(
-            "Failed to find Champion alias '%s' for model '%s'",
-            CHAMPION_ALIAS,
-            MODEL_NAME,
-        )
 
         raise RuntimeError(
-            f"Could not find Champion alias for '{MODEL_NAME}'"
+            f"Could not find Champion alias "
+            f"for '{MODEL_NAME}'"
         ) from exc
 
-    version = champion_version.version
-
-    logger.info(
-        "Champion version found: %s",
-        version,
+    version = str(
+        champion_version.version
     )
 
-    model_uri = f"models:/{MODEL_NAME}/{CHAMPION_ALIAS}"
+    model_uri = (
+        f"models:/{MODEL_NAME}/{version}"
+    )
 
     logger.info(
-        "Loading Champion model from: %s",
+        "Loading Champion: %s",
         model_uri,
     )
 
     try:
-        model = mlflow.lightgbm.load_model(model_uri)
 
-    except Exception as exc:
-        logger.exception(
-            "Failed to load Champion model"
+        model = (
+            mlflow.lightgbm.load_model(
+                model_uri
+            )
         )
 
+    except Exception as exc:
+
         raise RuntimeError(
-            "Could not load Champion model"
+            f"Could not load Champion version "
+            f"{version}"
         ) from exc
 
     logger.info(
-        "Champion model loaded successfully"
+        "Champion version %s loaded",
+        version,
     )
 
     return model, version
@@ -193,29 +286,100 @@ def load_champion() -> Tuple[object, str]:
 # Load Challenger
 # ============================================================
 
-def load_challenger(run_id: str):
-    """
-    Load Challenger model directly from its MLflow run.
-    """
+def load_challenger(
+    run_id: str,
+) -> object:
 
-    model_uri = f"runs:/{run_id}/model"
-
-    logger.info(
-        "Loading Challenger model from run: %s",
-        run_id,
+    model_uri = (
+        f"runs:/{run_id}/model"
     )
 
+    logger.info(
+        "Loading Challenger from: %s",
+        model_uri,
+    )
+
+    # --------------------------------------------------------
+    # Verify run exists
+    # --------------------------------------------------------
+
     try:
-        model = mlflow.lightgbm.load_model(model_uri)
+
+        run = client.get_run(
+            run_id
+        )
 
     except Exception as exc:
-        logger.exception(
-            "Failed to load Challenger model from run %s",
+
+        raise RuntimeError(
+            f"Challenger run '{run_id}' "
+            "does not exist"
+        ) from exc
+
+    logger.info(
+        "Challenger run found: %s",
+        run.info.run_id,
+    )
+
+    # --------------------------------------------------------
+    # Verify model artifact exists
+    # --------------------------------------------------------
+
+    try:
+
+        artifacts = client.list_artifacts(
             run_id,
+            "model",
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            f"Could not inspect model artifacts "
+            f"for run '{run_id}'"
+        ) from exc
+
+    if not artifacts:
+
+        raise RuntimeError(
+            f"No model artifact found in "
+            f"Challenger run '{run_id}'. "
+            "Retrain the Challenger using the "
+            "updated MLflow logging code."
+        )
+
+    logger.info(
+        "Challenger artifacts found:"
+    )
+
+    for artifact in artifacts:
+
+        logger.info(
+            "  %s",
+            artifact.path,
+        )
+
+    # --------------------------------------------------------
+    # Load model
+    # --------------------------------------------------------
+
+    try:
+
+        model = (
+            mlflow.lightgbm.load_model(
+                model_uri
+            )
+        )
+
+    except Exception as exc:
+
+        logger.exception(
+            "Failed to load Challenger"
         )
 
         raise RuntimeError(
-            f"Could not load Challenger model from run '{run_id}'"
+            f"Could not load Challenger "
+            f"from '{model_uri}'"
         ) from exc
 
     logger.info(
@@ -233,32 +397,33 @@ def promotion_gates(
     champion_metrics: Metrics,
     challenger_metrics: Metrics,
 ) -> dict:
-    """
-    Apply deterministic promotion rules.
 
-    Gate 1:
-        Challenger RMSE must improve by at least 1%.
+    champion_rmse = (
+        champion_metrics["rmse"]
+    )
 
-    Gate 2:
-        Challenger MAE must not be worse.
+    challenger_rmse = (
+        challenger_metrics["rmse"]
+    )
 
-    Gate 3:
-        Challenger R2 must not be worse.
+    champion_mae = (
+        champion_metrics["mae"]
+    )
 
-    All gates must pass for promotion.
-    """
+    challenger_mae = (
+        challenger_metrics["mae"]
+    )
 
-    champion_rmse = champion_metrics["rmse"]
-    challenger_rmse = challenger_metrics["rmse"]
+    champion_r2 = (
+        champion_metrics["r2"]
+    )
 
-    champion_mae = champion_metrics["mae"]
-    challenger_mae = challenger_metrics["mae"]
-
-    champion_r2 = champion_metrics["r2"]
-    challenger_r2 = challenger_metrics["r2"]
+    challenger_r2 = (
+        challenger_metrics["r2"]
+    )
 
     # --------------------------------------------------------
-    # Gate 1: RMSE improvement
+    # RMSE
     # --------------------------------------------------------
 
     required_rmse = (
@@ -266,19 +431,28 @@ def promotion_gates(
         * (1 - RMSE_IMPROVEMENT_THRESHOLD)
     )
 
-    rmse_pass = challenger_rmse <= required_rmse
+    rmse_pass = (
+        challenger_rmse
+        <= required_rmse
+    )
 
     # --------------------------------------------------------
-    # Gate 2: MAE must not regress
+    # MAE
     # --------------------------------------------------------
 
-    mae_pass = challenger_mae <= champion_mae
+    mae_pass = (
+        challenger_mae
+        <= champion_mae
+    )
 
     # --------------------------------------------------------
-    # Gate 3: R2 must not regress
+    # R2
     # --------------------------------------------------------
 
-    r2_pass = challenger_r2 >= champion_r2
+    r2_pass = (
+        challenger_r2
+        >= champion_r2
+    )
 
     all_pass = (
         rmse_pass
@@ -286,80 +460,79 @@ def promotion_gates(
         and r2_pass
     )
 
-    gates = {
-        "rmse_gate": rmse_pass,
-        "mae_gate": mae_pass,
-        "r2_gate": r2_pass,
-        "all_pass": all_pass,
-        "required_rmse": required_rmse,
-    }
-
     logger.info(
-        "Gate 1 - RMSE >= %.2f%% improvement: %s",
-        RMSE_IMPROVEMENT_THRESHOLD * 100,
+        "RMSE gate: %s",
         "PASS" if rmse_pass else "FAIL",
     )
 
     logger.info(
-        "Gate 2 - MAE not worse: %s",
+        "MAE gate: %s",
         "PASS" if mae_pass else "FAIL",
     )
 
     logger.info(
-        "Gate 3 - R2 not worse: %s",
+        "R2 gate: %s",
         "PASS" if r2_pass else "FAIL",
     )
 
     logger.info(
         "Promotion decision: %s",
-        "PASS" if all_pass else "REJECT",
+        "PROMOTE" if all_pass else "REJECT",
     )
 
-    return gates
+    return {
+        "rmse_gate": rmse_pass,
+        "mae_gate": mae_pass,
+        "r2_gate": r2_pass,
+        "all_pass": all_pass,
+        "required_rmse": float(
+            required_rmse
+        ),
+    }
 
 
 # ============================================================
 # Register Challenger
 # ============================================================
 
-def register_challenger(run_id: str) -> str:
-    """
-    Register Challenger model in MLflow Model Registry.
+def register_challenger(
+    run_id: str,
+) -> str:
 
-    Returns:
-        Registered model version.
-    """
-
-    model_uri = f"runs:/{run_id}/model"
-
-    logger.info(
-        "Registering Challenger model"
+    model_uri = (
+        f"runs:/{run_id}/model"
     )
 
     logger.info(
-        "Model URI: %s",
+        "Registering Challenger: %s",
         model_uri,
     )
 
     try:
-        registered_model = mlflow.register_model(
-            model_uri=model_uri,
-            name=MODEL_NAME,
+
+        registered = (
+            mlflow.register_model(
+                model_uri=model_uri,
+                name=MODEL_NAME,
+            )
         )
 
     except Exception as exc:
+
         logger.exception(
-            "Failed to register Challenger model"
+            "Failed to register Challenger"
         )
 
         raise RuntimeError(
-            "Could not register Challenger model"
+            "Could not register Challenger"
         ) from exc
 
-    version = str(registered_model.version)
+    version = str(
+        registered.version
+    )
 
     logger.info(
-        "Challenger registered successfully as version %s",
+        "Challenger registered as version %s",
         version,
     )
 
@@ -367,20 +540,20 @@ def register_challenger(run_id: str) -> str:
 
 
 # ============================================================
-# Promote Model
+# Promote
 # ============================================================
 
-def promote(version: str) -> None:
-    """
-    Move the Champion alias to the supplied model version.
-    """
+def promote(
+    version: str,
+) -> None:
 
     logger.info(
-        "Promoting model version %s to Champion",
+        "Setting Champion alias -> version %s",
         version,
     )
 
     try:
+
         client.set_registered_model_alias(
             name=MODEL_NAME,
             alias=CHAMPION_ALIAS,
@@ -388,23 +561,24 @@ def promote(version: str) -> None:
         )
 
     except Exception as exc:
+
         logger.exception(
-            "Failed to assign Champion alias to version %s",
+            "Failed to promote version %s",
             version,
         )
 
         raise RuntimeError(
-            f"Could not promote model version {version}"
+            f"Could not promote version {version}"
         ) from exc
 
     logger.info(
-        "Model version %s is now Champion",
+        "Version %s is now Champion",
         version,
     )
 
 
 # ============================================================
-# Model Comparison Logging
+# Comparison
 # ============================================================
 
 def log_model_comparison(
@@ -412,9 +586,6 @@ def log_model_comparison(
     champion_metrics: Metrics,
     challenger_metrics: Metrics,
 ) -> None:
-    """
-    Log a clear Champion vs Challenger comparison.
-    """
 
     logger.info("=" * 60)
     logger.info("MODEL COMPARISON")
@@ -439,7 +610,6 @@ def log_model_comparison(
         challenger_metrics["r2"],
     )
 
-    # RMSE improvement percentage
     rmse_improvement = (
         (
             champion_metrics["rmse"]
@@ -448,7 +618,6 @@ def log_model_comparison(
         / champion_metrics["rmse"]
     ) * 100
 
-    # MAE improvement percentage
     mae_improvement = (
         (
             champion_metrics["mae"]
@@ -457,7 +626,6 @@ def log_model_comparison(
         / champion_metrics["mae"]
     ) * 100
 
-    # R2 change
     r2_change = (
         challenger_metrics["r2"]
         - champion_metrics["r2"]
@@ -482,20 +650,17 @@ def log_model_comparison(
 
 
 # ============================================================
-# Main Promotion Pipeline
+# Main
 # ============================================================
 
-def main(run_id: str) -> int:
-    """
-    Complete Champion vs Challenger promotion pipeline.
-
-    Returns:
-        0 -> promotion successful
-        1 -> challenger rejected
-    """
+def main(
+    run_id: str,
+) -> int:
 
     logger.info("=" * 60)
-    logger.info("SENTINEL-AI MODEL PROMOTION")
+    logger.info(
+        "SENTINEL-AI MODEL PROMOTION"
+    )
     logger.info("=" * 60)
 
     logger.info(
@@ -504,21 +669,10 @@ def main(run_id: str) -> int:
     )
 
     # --------------------------------------------------------
-    # Step 1: Load frozen test set
+    # 1. Frozen test
     # --------------------------------------------------------
 
-    logger.info(
-        "Loading frozen test dataset"
-    )
-
-    try:
-        test_df = load_frozen_test()
-
-    except Exception:
-        logger.exception(
-            "Failed to load frozen test dataset"
-        )
-        raise
+    test_df = load_frozen_test()
 
     logger.info(
         "Frozen test rows: %d",
@@ -526,23 +680,27 @@ def main(run_id: str) -> int:
     )
 
     # --------------------------------------------------------
-    # Step 2: Load Champion
+    # 2. Champion
     # --------------------------------------------------------
 
-    champion_model, champion_version = load_champion()
+    champion_model, champion_version = (
+        load_champion()
+    )
 
     # --------------------------------------------------------
-    # Step 3: Load Challenger
+    # 3. Challenger
     # --------------------------------------------------------
 
-    challenger_model = load_challenger(run_id)
+    challenger_model = load_challenger(
+        run_id
+    )
 
     # --------------------------------------------------------
-    # Step 4: Evaluate Champion
+    # 4. Evaluate Champion
     # --------------------------------------------------------
 
     logger.info(
-        "Evaluating Champion model"
+        "Evaluating Champion"
     )
 
     champion_metrics = evaluate_model(
@@ -551,11 +709,11 @@ def main(run_id: str) -> int:
     )
 
     # --------------------------------------------------------
-    # Step 5: Evaluate Challenger
+    # 5. Evaluate Challenger
     # --------------------------------------------------------
 
     logger.info(
-        "Evaluating Challenger model"
+        "Evaluating Challenger"
     )
 
     challenger_metrics = evaluate_model(
@@ -564,7 +722,7 @@ def main(run_id: str) -> int:
     )
 
     # --------------------------------------------------------
-    # Step 6: Compare
+    # 6. Comparison
     # --------------------------------------------------------
 
     log_model_comparison(
@@ -574,7 +732,7 @@ def main(run_id: str) -> int:
     )
 
     # --------------------------------------------------------
-    # Step 7: Apply promotion gates
+    # 7. Gates
     # --------------------------------------------------------
 
     gates = promotion_gates(
@@ -583,39 +741,40 @@ def main(run_id: str) -> int:
     )
 
     # --------------------------------------------------------
-    # Step 8: Reject if any gate fails
+    # 8. Reject
     # --------------------------------------------------------
 
     if not gates["all_pass"]:
 
         logger.warning("=" * 60)
-        logger.warning("CHALLENGER REJECTED")
+        logger.warning(
+            "CHALLENGER REJECTED"
+        )
         logger.warning("=" * 60)
 
         logger.warning(
-            "No changes were made to the Champion model"
+            "Champion remains version %s",
+            champion_version,
         )
 
         return 1
 
     # --------------------------------------------------------
-    # Step 9: All gates passed
+    # 9. Register
     # --------------------------------------------------------
 
-    logger.info("=" * 60)
-    logger.info("ALL PROMOTION GATES PASSED")
-    logger.info("=" * 60)
+    logger.info(
+        "All gates passed."
+    )
 
-    # --------------------------------------------------------
-    # Step 10: Register Challenger
-    # --------------------------------------------------------
-
-    new_version = register_challenger(
-        run_id
+    new_version = (
+        register_challenger(
+            run_id
+        )
     )
 
     # --------------------------------------------------------
-    # Step 11: Promote Challenger
+    # 10. Promote
     # --------------------------------------------------------
 
     promote(
@@ -627,7 +786,11 @@ def main(run_id: str) -> int:
         "MODEL PROMOTION SUCCESSFUL"
     )
     logger.info(
-        "Champion version: %s",
+        "Previous Champion: %s",
+        champion_version,
+    )
+    logger.info(
+        "New Champion: %s",
         new_version,
     )
     logger.info("=" * 60)
@@ -636,7 +799,7 @@ def main(run_id: str) -> int:
 
 
 # ============================================================
-# CLI Entry Point
+# CLI
 # ============================================================
 
 if __name__ == "__main__":
@@ -644,17 +807,16 @@ if __name__ == "__main__":
     if len(sys.argv) != 2:
 
         logger.error(
-            "Invalid arguments"
-        )
-
-        logger.error(
             "Usage: "
-            "python -m src.training.promote <challenger_run_id>"
+            "python -m src.training.promote "
+            "<challenger_run_id>"
         )
 
         sys.exit(1)
 
-    challenger_run_id = sys.argv[1]
+    challenger_run_id = (
+        sys.argv[1]
+    )
 
     try:
 
