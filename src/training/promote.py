@@ -19,6 +19,10 @@ from sklearn.metrics import (
 )
 
 from src.training.dataset import load_frozen_test
+from src.evaluation.bootstrap import bootstrap_gate
+from src.evaluation.segment import evaluate_segments
+from src.evaluation.recent_test import evaluate_recent_test
+from src.ingestion.preprocess import clean_and_engineer
 
 
 # ============================================================
@@ -34,6 +38,16 @@ CHAMPION_ALIAS = "Champion"
 EXPERIMENT_NAME = "Sentinel-AI"
 
 RMSE_IMPROVEMENT_THRESHOLD = 0.01
+
+RECENT_DATA_PATH = os.getenv(
+    "RECENT_TEST_DATA_PATH",
+    "/app/data/raw/yellow_tripdata_2026-04.parquet",
+)
+
+RECENT_DATA_MONTH = os.getenv(
+    "RECENT_TEST_MONTH",
+    "April 2026",
+)
 
 
 # ============================================================
@@ -81,56 +95,33 @@ Metrics = Dict[str, float]
 # Evaluate
 # ============================================================
 
-def evaluate_model(
+def _prepare_features(
     model,
     test_df: pd.DataFrame,
-) -> Metrics:
+) -> tuple[pd.Series, pd.DataFrame]:
     """
-    Evaluate a model on the frozen test dataset.
-
-    The evaluation automatically aligns the frozen-test columns
-    with the exact feature names expected by the loaded model.
+    Align test data with the exact feature names expected by the
+    loaded LightGBM model.
     """
-
-    logger.info(
-        "Evaluating model on %d frozen-test rows",
-        len(test_df),
-    )
 
     if "trip_duration" not in test_df.columns:
         raise ValueError(
-            "Frozen test dataset does not contain "
-            "'trip_duration'"
+            "Test dataset does not contain 'trip_duration'"
+        )
+
+    if not hasattr(model, "feature_name_"):
+        raise ValueError(
+            "Loaded model does not expose LightGBM feature_name_"
         )
 
     y = test_df["trip_duration"]
 
     X = test_df.drop(
-        columns=[
-            "trip_duration",
-            "row_key",
-        ],
+        columns=["trip_duration", "row_key"],
         errors="ignore",
     ).copy()
 
-    if not hasattr(model, "feature_name_"):
-        raise ValueError(
-            "Loaded model does not expose "
-            "LightGBM feature_name_"
-        )
-
-    model_features = list(
-        model.feature_name_
-    )
-
-    logger.info(
-        "Model expects features: %s",
-        model_features,
-    )
-
-    # --------------------------------------------------------
-    # Case-insensitive feature alignment
-    # --------------------------------------------------------
+    model_features = list(model.feature_name_)
 
     column_lookup = {
         column.lower(): column
@@ -138,35 +129,22 @@ def evaluate_model(
     }
 
     missing_features = []
-
     selected_columns = []
 
     for feature in model_features:
-
-        source_column = column_lookup.get(
-            feature.lower()
-        )
+        source_column = column_lookup.get(feature.lower())
 
         if source_column is None:
-            missing_features.append(
-                feature
-            )
+            missing_features.append(feature)
         else:
-            selected_columns.append(
-                source_column
-            )
+            selected_columns.append(source_column)
 
     if missing_features:
         raise ValueError(
-            f"Missing model features: "
-            f"{missing_features}"
+            f"Missing model features: {missing_features}"
         )
 
-    X = X[
-        selected_columns
-    ].copy()
-
-    # Rename to EXACT model feature names
+    X = X[selected_columns].copy()
     X.columns = model_features
 
     logger.info(
@@ -174,23 +152,45 @@ def evaluate_model(
         len(X.columns),
     )
 
-    # --------------------------------------------------------
-    # Prediction
-    # --------------------------------------------------------
+    return y, X
 
-    predictions = model.predict(
-        X
+
+def predict_model(
+    model,
+    test_df: pd.DataFrame,
+) -> tuple[pd.Series, object]:
+    """
+    Generate predictions once and return the target plus predictions.
+
+    This is shared by all evaluation gates so Champion and Challenger
+    are not repeatedly scored on the same dataset.
+    """
+
+    logger.info(
+        "Generating predictions on %d rows",
+        len(test_df),
     )
 
-    # --------------------------------------------------------
-    # Metrics
-    # --------------------------------------------------------
+    y, X = _prepare_features(model, test_df)
+
+    predictions = model.predict(X)
+
+    logger.info(
+        "Prediction complete: %d rows",
+        len(predictions),
+    )
+
+    return y, predictions
+
+
+def calculate_metrics(
+    y,
+    predictions,
+) -> Metrics:
+    """Calculate RMSE, MAE and R2 from existing predictions."""
 
     rmse = (
-        mean_squared_error(
-            y,
-            predictions,
-        )
+        mean_squared_error(y, predictions)
         ** 0.5
     )
 
@@ -218,6 +218,78 @@ def evaluate_model(
     )
 
     return metrics
+
+
+def evaluate_model(
+    model,
+    test_df: pd.DataFrame,
+) -> Metrics:
+    """
+    Evaluate a model on a test dataset.
+
+    Kept as a compatibility wrapper. The promotion pipeline itself
+    generates predictions once and reuses them across all gates.
+    """
+
+    y, predictions = predict_model(
+        model,
+        test_df,
+    )
+
+    return calculate_metrics(
+        y,
+        predictions,
+    )
+
+
+def load_recent_test() -> pd.DataFrame:
+    """
+    Load and preprocess the latest labeled recent-test dataset.
+
+    For the current Sentinel-AI milestone, this is the April 2026
+    drift-month dataset. It is completed-trip data, so trip_duration
+    labels are available.
+    """
+
+    logger.info(
+        "Loading Recent Test source: %s",
+        RECENT_DATA_PATH,
+    )
+
+    if not os.path.exists(RECENT_DATA_PATH):
+        raise RuntimeError(
+            f"Recent Test data not found: "
+            f"{RECENT_DATA_PATH}"
+        )
+
+    try:
+        recent_raw = pd.read_parquet(
+            RECENT_DATA_PATH
+        )
+
+        recent_df = clean_and_engineer(
+            recent_raw,
+            RECENT_DATA_MONTH,
+        )
+
+    except Exception as exc:
+        raise RuntimeError(
+            f"Could not load/process Recent Test data "
+            f"from '{RECENT_DATA_PATH}'"
+        ) from exc
+
+    if "trip_duration" not in recent_df.columns:
+        raise ValueError(
+            "Recent Test dataset does not contain "
+            "'trip_duration' after preprocessing."
+        )
+
+    logger.info(
+        "Recent Test rows after preprocessing: %d",
+        len(recent_df),
+    )
+
+    return recent_df
 
 
 # ============================================================
@@ -657,11 +729,9 @@ def main(
     run_id: str,
 ) -> int:
 
-    logger.info("=" * 60)
-    logger.info(
-        "SENTINEL-AI MODEL PROMOTION"
-    )
-    logger.info("=" * 60)
+    logger.info("=" * 70)
+    logger.info("SENTINEL-AI MODEL PROMOTION")
+    logger.info("=" * 70)
 
     logger.info(
         "Challenger Run ID: %s",
@@ -669,18 +739,18 @@ def main(
     )
 
     # --------------------------------------------------------
-    # 1. Frozen test
+    # 1. Load Frozen Test
     # --------------------------------------------------------
 
-    test_df = load_frozen_test()
+    frozen_df = load_frozen_test()
 
     logger.info(
         "Frozen test rows: %d",
-        len(test_df),
+        len(frozen_df),
     )
 
     # --------------------------------------------------------
-    # 2. Champion
+    # 2. Load Champion
     # --------------------------------------------------------
 
     champion_model, champion_version = (
@@ -688,7 +758,7 @@ def main(
     )
 
     # --------------------------------------------------------
-    # 3. Challenger
+    # 3. Load Challenger
     # --------------------------------------------------------
 
     challenger_model = load_challenger(
@@ -696,33 +766,43 @@ def main(
     )
 
     # --------------------------------------------------------
-    # 4. Evaluate Champion
+    # 4. Generate Frozen predictions ONCE
     # --------------------------------------------------------
 
     logger.info(
-        "Evaluating Champion"
+        "Generating Champion frozen predictions"
     )
 
-    champion_metrics = evaluate_model(
+    y_frozen, champion_frozen_pred = predict_model(
         champion_model,
-        test_df,
+        frozen_df,
     )
-
-    # --------------------------------------------------------
-    # 5. Evaluate Challenger
-    # --------------------------------------------------------
 
     logger.info(
-        "Evaluating Challenger"
+        "Generating Challenger frozen predictions"
     )
 
-    challenger_metrics = evaluate_model(
+    _, challenger_frozen_pred = predict_model(
         challenger_model,
-        test_df,
+        frozen_df,
     )
 
     # --------------------------------------------------------
-    # 6. Comparison
+    # 5. Frozen metrics
+    # --------------------------------------------------------
+
+    champion_metrics = calculate_metrics(
+        y_frozen,
+        champion_frozen_pred,
+    )
+
+    challenger_metrics = calculate_metrics(
+        y_frozen,
+        challenger_frozen_pred,
+    )
+
+    # --------------------------------------------------------
+    # 6. Model comparison
     # --------------------------------------------------------
 
     log_model_comparison(
@@ -732,25 +812,196 @@ def main(
     )
 
     # --------------------------------------------------------
-    # 7. Gates
+    # 7. Existing metric gates
     # --------------------------------------------------------
 
-    gates = promotion_gates(
+    metric_gates = promotion_gates(
         champion_metrics,
         challenger_metrics,
     )
 
     # --------------------------------------------------------
-    # 8. Reject
+    # 8. Bootstrap Gate
+    #
+    # Default gate_on is RMSE only. MAE/R2 are still reported
+    # by the Bootstrap implementation.
     # --------------------------------------------------------
 
-    if not gates["all_pass"]:
+    logger.info("=" * 70)
+    logger.info("BOOTSTRAP GATE")
+    logger.info("=" * 70)
 
-        logger.warning("=" * 60)
+    bootstrap_result = bootstrap_gate(
+        y_true=y_frozen,
+        champion_pred=champion_frozen_pred,
+        challenger_pred=challenger_frozen_pred,
+    )
+
+    logger.info(
+        "Bootstrap: %s",
+        "PASS" if bootstrap_result["passed"] else "FAIL",
+    )
+
+    logger.info(
+        "Bootstrap reason: %s",
+        bootstrap_result["reason"],
+    )
+
+    # --------------------------------------------------------
+    # 9. Segment Gate
+    # --------------------------------------------------------
+
+    logger.info("=" * 70)
+    logger.info("SEGMENT GATE")
+    logger.info("=" * 70)
+
+    segment_result = evaluate_segments(
+        test_df=frozen_df,
+        y_true=y_frozen,
+        champion_pred=champion_frozen_pred,
+        challenger_pred=challenger_frozen_pred,
+    )
+
+    logger.info(
+        "Segment: %s",
+        "PASS" if segment_result["passed"] else "FAIL",
+    )
+
+    logger.info(
+        "Segment reason: %s",
+        segment_result["reason"],
+    )
+
+    logger.info(
+        "Segment evaluated=%d skipped=%d failed=%d",
+        segment_result.get("evaluated_segments", 0),
+        segment_result.get("skipped_segments", 0),
+        segment_result.get("failed_segments", 0),
+    )
+
+    # --------------------------------------------------------
+    # 10. Recent Test Gate
+    # --------------------------------------------------------
+
+    logger.info("=" * 70)
+    logger.info(
+        "RECENT TEST GATE | %s",
+        RECENT_DATA_MONTH,
+    )
+    logger.info("=" * 70)
+
+    recent_df = load_recent_test()
+
+    y_recent, champion_recent_pred = predict_model(
+        champion_model,
+        recent_df,
+    )
+
+    _, challenger_recent_pred = predict_model(
+        challenger_model,
+        recent_df,
+    )
+
+    recent_result = evaluate_recent_test(
+        recent_df=recent_df,
+        y_recent=y_recent,
+        challenger_recent_pred=challenger_recent_pred,
+        challenger_frozen_metrics=challenger_metrics,
+        champion_frozen_metrics=champion_metrics,
+        champion_recent_pred=champion_recent_pred,
+    )
+
+    logger.info(
+        "Recent Test: %s",
+        "PASS" if recent_result["passed"] else "FAIL",
+    )
+
+    logger.info(
+        "Recent Test reason: %s",
+        recent_result["reason"],
+    )
+
+    logger.info(
+        "Recent Test rows: %d",
+        recent_result["rows"],
+    )
+
+    if recent_result.get("evaluated"):
+        challenger_recent = recent_result["challenger"]
+        champion_context = recent_result["champion_context"]
+
+        logger.info(
+            "Challenger Recent | RMSE=%.4f | MAE=%.4f",
+            challenger_recent["recent"]["rmse"],
+            challenger_recent["recent"]["mae"],
+        )
+
+        logger.info(
+            "Challenger degradation | RMSE=%.3f%% | MAE=%.3f%%",
+            challenger_recent["degradation"]["rmse"]["relative_pct"],
+            challenger_recent["degradation"]["mae"]["relative_pct"],
+        )
+
+        logger.info(
+            "Champion context degradation | RMSE=%.3f%% | MAE=%.3f%%",
+            champion_context["degradation"]["rmse"]["relative_pct"],
+            champion_context["degradation"]["mae"]["relative_pct"],
+        )
+
+    # --------------------------------------------------------
+    # 11. Final combined decision
+    # --------------------------------------------------------
+
+    all_gates_pass = (
+        metric_gates["all_pass"]
+        and bootstrap_result["passed"]
+        and segment_result["passed"]
+        and recent_result["passed"]
+    )
+
+    logger.info("=" * 70)
+    logger.info("FINAL PROMOTION GATE SUMMARY")
+    logger.info("=" * 70)
+
+    logger.info(
+        "Frozen metric gates : %s",
+        "PASS" if metric_gates["all_pass"] else "FAIL",
+    )
+
+    logger.info(
+        "Bootstrap gate      : %s",
+        "PASS" if bootstrap_result["passed"] else "FAIL",
+    )
+
+    logger.info(
+        "Segment gate        : %s",
+        "PASS" if segment_result["passed"] else "FAIL",
+    )
+
+    logger.info(
+        "Recent Test gate    : %s",
+        "PASS" if recent_result["passed"] else "FAIL",
+    )
+
+    logger.info(
+        "FINAL DECISION      : %s",
+        "PROMOTE" if all_gates_pass else "REJECT",
+    )
+
+    logger.info("=" * 70)
+
+    # --------------------------------------------------------
+    # 12. Reject
+    #
+    # IMPORTANT:
+    # No registration happens before every gate passes.
+    # --------------------------------------------------------
+
+    if not all_gates_pass:
+
         logger.warning(
             "CHALLENGER REJECTED"
         )
-        logger.warning("=" * 60)
 
         logger.warning(
             "Champion remains version %s",
@@ -760,28 +1011,26 @@ def main(
         return 1
 
     # --------------------------------------------------------
-    # 9. Register
+    # 13. Register Challenger
     # --------------------------------------------------------
 
     logger.info(
-        "All gates passed."
+        "All promotion gates passed."
     )
 
-    new_version = (
-        register_challenger(
-            run_id
-        )
+    new_version = register_challenger(
+        run_id
     )
 
     # --------------------------------------------------------
-    # 10. Promote
+    # 14. Promote
     # --------------------------------------------------------
 
     promote(
         new_version
     )
 
-    logger.info("=" * 60)
+    logger.info("=" * 70)
     logger.info(
         "MODEL PROMOTION SUCCESSFUL"
     )
@@ -793,7 +1042,7 @@ def main(
         "New Champion: %s",
         new_version,
     )
-    logger.info("=" * 60)
+    logger.info("=" * 70)
 
     return 0
 
