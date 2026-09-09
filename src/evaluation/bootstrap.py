@@ -26,6 +26,18 @@ def bootstrap_gate(
     y_true = np.asarray(y_true, dtype=np.float64)
     champion_pred = np.asarray(champion_pred, dtype=np.float64)
     challenger_pred = np.asarray(challenger_pred, dtype=np.float64)
+    
+    for name, arr in (
+        ("y_true", y_true),
+        ("champion_pred", champion_pred),
+        ("challenger_pred", challenger_pred),
+    ):
+        if not np.all(np.isfinite(arr)):
+            bad = int((~np.isfinite(arr)).sum())
+            raise ValueError(
+                f"{name} contains {bad} non-finite value(s) (NaN or inf). "
+                "Bootstrap gate requires clean predictions."
+            )
 
     if not (len(y_true) == len(champion_pred) == len(challenger_pred)):
         raise ValueError(
