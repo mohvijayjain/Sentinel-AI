@@ -30,12 +30,22 @@ CHROMA_COLLECTION_NAME = os.getenv(
 
 
 # ============================================================
-# LLM — NVIDIA API
+# NVIDIA API (shared endpoint for LLM + embeddings)
 # ============================================================
 
 NVIDIA_API_KEY = os.getenv(
     "NVIDIA_API_KEY"
 )
+
+NVIDIA_BASE_URL = os.getenv(
+    "NVIDIA_BASE_URL",
+    "https://integrate.api.nvidia.com/v1",
+)
+
+
+# ============================================================
+# LLM — NVIDIA API
+# ============================================================
 
 NVIDIA_MODEL = os.getenv(
     "NVIDIA_MODEL",
@@ -44,13 +54,21 @@ NVIDIA_MODEL = os.getenv(
 
 
 # ============================================================
-# Embeddings
+# Embeddings — NVIDIA
 # ============================================================
 
 EMBEDDING_MODEL = os.getenv(
     "EMBEDDING_MODEL",
-    "nvidia/llama-nemotron-embed-1b-v2",
+    "nvidia/nemotron-3-embed-1b",
 )
+
+EMBEDDING_DIM = int(
+    os.getenv(
+        "EMBEDDING_DIM",
+        "2048",
+    )
+)
+
 
 # ============================================================
 # Chunking
@@ -59,14 +77,14 @@ EMBEDDING_MODEL = os.getenv(
 CHUNK_SIZE = int(
     os.getenv(
         "RAG_CHUNK_SIZE",
-        "800",
+        "1000",
     )
 )
 
 CHUNK_OVERLAP = int(
     os.getenv(
         "RAG_CHUNK_OVERLAP",
-        "120",
+        "300",
     )
 )
 
@@ -96,6 +114,26 @@ def validate_config() -> None:
         raise RuntimeError(
             "NVIDIA_API_KEY is not set. "
             "Add it to the .env file."
+        )
+
+    if not NVIDIA_BASE_URL:
+        raise RuntimeError(
+            "NVIDIA_BASE_URL is not configured."
+        )
+
+    if not EMBEDDING_MODEL:
+        raise RuntimeError(
+            "EMBEDDING_MODEL is not configured."
+        )
+
+    if EMBEDDING_DIM <= 0:
+        raise ValueError(
+            "EMBEDDING_DIM must be greater than 0."
+        )
+
+    if not NVIDIA_MODEL:
+        raise RuntimeError(
+            "NVIDIA_MODEL is not configured."
         )
 
     if CHUNK_SIZE <= 0:
