@@ -1,5 +1,13 @@
-
 # src/rag/retriever.py
+
+"""
+Retrieval layer for Sentinel-AI RAG.
+
+Responsibilities:
+    1. Convert user query into an embedding.
+    2. Search ChromaDB for relevant documents.
+    3. Return clean, structured retrieval results.
+"""
 
 from typing import Any, Dict, List
 
@@ -7,6 +15,10 @@ from src.rag.config import TOP_K
 from src.rag.embeddings import embed_query
 from src.rag.chroma_store import ChromaStore
 
+
+# ============================================================
+# RAG Retriever
+# ============================================================
 
 class RAGRetriever:
     """
@@ -33,16 +45,25 @@ class RAGRetriever:
     def retrieve(
         self,
         query: str,
+        top_k: int | None = None,
     ) -> List[Dict[str, Any]]:
         """
         Convert the user query into an embedding and
         retrieve the most relevant documents.
 
-        Returned items are ordered best-first. Each carries a
-        `distance` (see note below), not a similarity score.
+        top_k can be specified per query.
         """
 
-        if not query or not query.strip():
+        # ----------------------------------------------------
+        # Validate query
+        # ----------------------------------------------------
+
+        if not isinstance(query, str):
+            raise TypeError(
+                "Query must be a string."
+            )
+
+        if not query.strip():
             raise ValueError(
                 "Query cannot be empty."
             )
@@ -50,11 +71,18 @@ class RAGRetriever:
         query = query.strip()
 
         # ----------------------------------------------------
+        # Validate top_k
+        # ----------------------------------------------------
+
+        k = self.top_k if top_k is None else top_k
+
+        if k <= 0:
+            raise ValueError(
+                "top_k must be greater than 0."
+            )
+
+        # ----------------------------------------------------
         # Generate query embedding
-        #
-        # Must use embed_query (input_type="query"). Nemotron is
-        # asymmetric: encoding a query as a passage silently
-        # degrades retrieval quality.
         # ----------------------------------------------------
 
         query_embedding = embed_query(query)
@@ -65,20 +93,22 @@ class RAGRetriever:
 
         results = self.store.query(
             query_embedding=query_embedding,
-            top_k=self.top_k,
+            top_k=k,
         )
 
         # ----------------------------------------------------
-        # Convert ChromaDB response into clean results
-        #
-        # Chroma nests each field one level deep (one list per
-        # query). We only ever send a single query, so we take
-        # index [0], defaulting to [[]] to stay safe on empty
-        # results.
+        # Extract ChromaDB results
         # ----------------------------------------------------
 
-        documents = results.get("documents", [[]])[0]
-        distances = results.get("distances", [[]])[0]
+        documents = results.get(
+            "documents",
+            [[]],
+        )[0]
+
+        distances = results.get(
+            "distances",
+            [[]],
+        )[0]
 
         metadatas = results.get(
             "metadatas",
@@ -90,19 +120,22 @@ class RAGRetriever:
             [[]],
         )[0]
 
-        retrieved = []
+        # ----------------------------------------------------
+        # Build clean result objects
+        # ----------------------------------------------------
+
+        retrieved: List[Dict[str, Any]] = []
 
         for i, document in enumerate(documents):
 
             retrieved.append(
                 {
-                    "id": ids[i] if i < len(ids) else None,
+                    "id": (
+                        ids[i]
+                        if i < len(ids)
+                        else None
+                    ),
                     "document": document,
-                    # NOTE: Chroma returns a DISTANCE, not a
-                    # similarity. For a cosine collection this is
-                    # (1 - cosine_similarity), so SMALLER is more
-                    # relevant. Convert/invert before any code
-                    # that expects "higher = better".
                     "distance": (
                         distances[i]
                         if i < len(distances)
@@ -118,8 +151,9 @@ class RAGRetriever:
 
         return retrieved
 
+
 # ============================================================
-# Convenience Function
+# Reusable Retriever Instance
 # ============================================================
 
 _retriever = None
@@ -128,10 +162,6 @@ _retriever = None
 def get_retriever() -> RAGRetriever:
     """
     Return a reusable RAG retriever instance.
-
-    The instance caches TOP_K from first construction. To tune
-    top_k interactively, build a fresh RAGRetriever(top_k=...)
-    instead of using this singleton.
     """
 
     global _retriever
@@ -142,12 +172,19 @@ def get_retriever() -> RAGRetriever:
     return _retriever
 
 
+# ============================================================
+# Convenience Function
+# ============================================================
+
 def retrieve(
     query: str,
+    top_k: int | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Convenience function for retrieving relevant documents.
     """
 
-    return get_retriever().retrieve(query)
-
+    return get_retriever().retrieve(
+        query=query,
+        top_k=top_k,
+    )

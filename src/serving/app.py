@@ -17,6 +17,8 @@ from .routes import router
 from .logger import logger
 
 from src.api.routes.monitoring import router as monitoring_router
+from src.api.routes.rag import router as rag_router
+
 
 
 
@@ -42,6 +44,7 @@ app.include_router(router)
 app.include_router(
     monitoring_router
 )
+app.include_router(rag_router)
 
 model = None
 features = None
