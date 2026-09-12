@@ -49,7 +49,7 @@ NVIDIA_BASE_URL = os.getenv(
 
 NVIDIA_MODEL = os.getenv(
     "NVIDIA_MODEL",
-    "deepseek-ai/deepseek-v4-pro-0813",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
 )
 
 
