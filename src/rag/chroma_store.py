@@ -1,3 +1,4 @@
+
 # src/rag/chroma_store.py
 
 from typing import Any, Dict, List, Optional
@@ -13,6 +14,16 @@ from src.rag.config import (
 class ChromaStore:
     """
     Persistent ChromaDB store for Sentinel-AI RAG.
+
+    The collection uses cosine distance to match the query-side
+    assumption in retriever.py: Chroma returns a DISTANCE where
+    smaller is more relevant (for cosine, 1 - cosine_similarity).
+
+    NOTE: the distance metric is fixed at collection CREATION.
+    get_or_create_collection will NOT change it on an existing
+    collection. If a collection was created earlier without the
+    cosine metadata, delete data/chroma (or use a new
+    CHROMA_COLLECTION_NAME) so it is recreated with cosine.
     """
 
     def __init__(
@@ -26,9 +37,12 @@ class ChromaStore:
             path=str(CHROMA_DIR)
         )
 
-        # Get existing collection or create a new one
+        # Get existing collection or create a new one.
+        # hnsw:space sets the distance metric; only applied on
+        # first creation (see class docstring).
         self.collection = self.client.get_or_create_collection(
-            name=self.collection_name
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
         )
 
     # ========================================================
@@ -86,6 +100,9 @@ class ChromaStore:
     ) -> Dict[str, Any]:
         """
         Retrieve the most relevant documents.
+
+        Returns Chroma's native shape: each field (documents,
+        distances, metadatas, ids) nested one level per query.
         """
 
         if not query_embedding:
@@ -160,7 +177,12 @@ class ChromaStore:
 
     def clear(self) -> None:
         """
-        Delete all documents from the collection.
+        Delete all documents from the collection, preserving the
+        collection itself (and its cosine metric).
+
+        Reads all IDs then deletes them. Fine at knowledge-base
+        scale. For a large collection, prefer reset() which drops
+        and recreates the collection instead.
         """
 
         existing = self.collection.get()
@@ -171,3 +193,25 @@ class ChromaStore:
             self.collection.delete(
                 ids=ids
             )
+
+    # ========================================================
+    # Reset Collection
+    # ========================================================
+
+    def reset(self) -> None:
+        """
+        Drop and recreate the collection.
+
+        Cheaper than clear() for large collections, and the
+        recreation reapplies the cosine metric.
+        """
+
+        self.client.delete_collection(
+            name=self.collection_name
+        )
+
+        self.collection = self.client.get_or_create_collection(
+            name=self.collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
+
