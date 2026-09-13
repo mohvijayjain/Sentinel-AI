@@ -23,6 +23,7 @@ services:
 
     volumes:
       - ./model:/app/model
+      - ./data/chroma:/app/data/chroma
 
     depends_on:
       postgres:

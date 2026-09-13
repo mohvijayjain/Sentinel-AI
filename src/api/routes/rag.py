@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from src.api.config import API_KEY
+from src.serving.config import API_KEY
 from src.rag.config import TOP_K
 from src.rag.rag import ask
 
