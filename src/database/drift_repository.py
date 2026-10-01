@@ -133,12 +133,13 @@ def insert_monitoring_run(
             :drifted_features,
             :report_path
         )
-    """)
 
+        RETURNING id
+    """)
 
     with engine.begin() as conn:
 
-        conn.execute(
+        result = conn.execute(
             query,
             {
                 "statistical_score": statistical_score,
@@ -151,7 +152,11 @@ def insert_monitoring_run(
             }
         )
 
-    print("✅ Monitoring run saved")
+        run_id = result.scalar_one()
+
+    print(f"✅ Monitoring run saved: {run_id}")
+
+    return run_id
     
     
 def get_latest_monitoring_run():

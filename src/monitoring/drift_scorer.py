@@ -3,6 +3,7 @@ import json
 import os
 
 from src.database.drift_repository import (insert_monitoring_run, insert_drift_scores)
+from src.rag.knowledge_updater import upsert_monitoring_run
 
 
 # ============================================================
@@ -231,7 +232,7 @@ if __name__ == "__main__":
     statistical_df = pd.read_csv(STATISTICAL_PATH)
     insert_drift_scores(statistical_df)
     
-    insert_monitoring_run(
+    run_id = insert_monitoring_run(
     statistical_score=statistical_score,
     shap_score=shap_score,
     prediction_score=prediction_score,
@@ -239,6 +240,14 @@ if __name__ == "__main__":
     action=action,
     drifted_features=[],
     report_path="reports/drift_summary.json"
+)
+    upsert_monitoring_run(
+    run_id=run_id,
+    statistical_score=statistical_score,
+    shap_score=shap_score,
+    prediction_score=prediction_score,
+    overall_score=overall_score,
+    action=action,
 )
 
 
