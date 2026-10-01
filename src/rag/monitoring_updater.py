@@ -1,5 +1,5 @@
 """
-src/rag/knowledge_updater.py
+src/rag/monitoring_updater.py
 
 Index Sentinel-AI monitoring runs into ChromaDB for semantic retrieval.
 

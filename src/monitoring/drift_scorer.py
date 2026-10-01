@@ -3,7 +3,7 @@ import json
 import os
 
 from src.database.drift_repository import (insert_monitoring_run, insert_drift_scores)
-from src.rag.knowledge_updater import upsert_monitoring_run
+from src.rag.monitoring_updater import upsert_monitoring_run
 
 
 # ============================================================

@@ -214,34 +214,34 @@ class ChromaStore:
             name=self.collection_name,
             metadata={"hnsw:space": "cosine"},
         )
-def upsert_documents(
-    self,
-    documents,
-    embeddings,
-    ids,
-    metadatas=None,
-):
-    if not documents:
-        return
+    def upsert_documents(
+        self,
+        documents,
+        embeddings,
+        ids,
+        metadatas=None,
+    ):
+        if not documents:
+            return
 
-    if len(documents) != len(embeddings):
-        raise ValueError(
-            "Number of documents must match number of embeddings."
+        if len(documents) != len(embeddings):
+            raise ValueError(
+                "Number of documents must match number of embeddings."
+            )
+
+        if len(documents) != len(ids):
+            raise ValueError(
+                "Number of documents must match number of IDs."
+            )
+
+        if metadatas is not None and len(documents) != len(metadatas):
+            raise ValueError(
+                "Number of documents must match number of metadata entries."
+            )
+
+        self.collection.upsert(
+            ids=ids,
+            documents=documents,
+            embeddings=embeddings,
+            metadatas=metadatas,
         )
-
-    if len(documents) != len(ids):
-        raise ValueError(
-            "Number of documents must match number of IDs."
-        )
-
-    if metadatas is not None and len(documents) != len(metadatas):
-        raise ValueError(
-            "Number of documents must match number of metadata entries."
-        )
-
-    self.collection.upsert(
-        ids=ids,
-        documents=documents,
-        embeddings=embeddings,
-        metadatas=metadatas,
-    )
