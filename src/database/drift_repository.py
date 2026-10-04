@@ -256,11 +256,13 @@ def insert_retraining_event(
             :promoted,
             :mlflow_run_id
         )
+
+        RETURNING id
     """)
 
     with engine.begin() as conn:
 
-        conn.execute(
+        result = conn.execute(
             query,
             {
                 "triggered_reason": triggered_reason,
@@ -271,4 +273,11 @@ def insert_retraining_event(
             }
         )
 
-    print("✅ Retraining event saved to PostgreSQL")
+        event_id = result.scalar_one()
+
+    print(
+        f"✅ Retraining event saved to PostgreSQL: "
+        f"event_id={event_id}"
+    )
+
+    return event_id
