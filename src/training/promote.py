@@ -727,7 +727,7 @@ def log_model_comparison(
 
 def main(
     run_id: str,
-) -> int:
+) -> dict:
 
     logger.info("=" * 70)
     logger.info("SENTINEL-AI MODEL PROMOTION")
@@ -1008,7 +1008,18 @@ def main(
             champion_version,
         )
 
-        return 1
+        return {
+            "promoted": False,
+            "mlflow_run_id": run_id,
+            "new_model_rmse": challenger_metrics["rmse"],
+            "new_model_mae": challenger_metrics["mae"],
+            "new_model_r2": challenger_metrics["r2"],
+            "champion_rmse": champion_metrics["rmse"],
+            "champion_mae": champion_metrics["mae"],
+            "champion_r2": champion_metrics["r2"],
+            "champion_version": champion_version,
+            "new_version": None,
+        }
 
     # --------------------------------------------------------
     # 13. Register Challenger
@@ -1044,7 +1055,18 @@ def main(
     )
     logger.info("=" * 70)
 
-    return 0
+    return {
+        "promoted": True,
+        "mlflow_run_id": run_id,
+        "new_model_rmse": challenger_metrics["rmse"],
+        "new_model_mae": challenger_metrics["mae"],
+        "new_model_r2": challenger_metrics["r2"],
+        "champion_rmse": champion_metrics["rmse"],
+        "champion_mae": champion_metrics["mae"],
+        "champion_r2": champion_metrics["r2"],
+        "champion_version": champion_version,
+        "new_version": new_version,
+    }
 
 
 # ============================================================
@@ -1069,9 +1091,11 @@ if __name__ == "__main__":
 
     try:
 
-        exit_code = main(
-            challenger_run_id
+        result = main(
+        challenger_run_id
         )
+
+        exit_code = 0 if result["promoted"] else 1
 
     except Exception:
 

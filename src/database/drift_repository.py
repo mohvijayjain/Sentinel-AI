@@ -228,3 +228,47 @@ def get_feature_drift_scores():
         result = conn.execute(query)
 
         return result.fetchall()
+    
+    
+def insert_retraining_event(
+    triggered_reason,
+    new_model_rmse,
+    champion_rmse,
+    promoted,
+    mlflow_run_id
+):
+
+    query = text("""
+        INSERT INTO retraining_events
+        (
+            triggered_reason,
+            new_model_rmse,
+            champion_rmse,
+            promoted,
+            mlflow_run_id
+        )
+
+        VALUES
+        (
+            :triggered_reason,
+            :new_model_rmse,
+            :champion_rmse,
+            :promoted,
+            :mlflow_run_id
+        )
+    """)
+
+    with engine.begin() as conn:
+
+        conn.execute(
+            query,
+            {
+                "triggered_reason": triggered_reason,
+                "new_model_rmse": new_model_rmse,
+                "champion_rmse": champion_rmse,
+                "promoted": promoted,
+                "mlflow_run_id": mlflow_run_id
+            }
+        )
+
+    print("✅ Retraining event saved to PostgreSQL")
