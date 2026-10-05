@@ -20,11 +20,11 @@ FEATURES = [
     "pickup_month",
     "is_weekend",
     "is_rush_hour",
-    "pulocationid",
-    "dolocationid",
+    "PULocationID",
+    "DOLocationID",
     "payment_type",
-    "vendorid",
-    "ratecodeid",
+    "VendorID",
+    "RatecodeID",
 ]
 
 DROP_COLS = [
@@ -157,7 +157,7 @@ def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
 
 # ── Master Clean Function ──────────────────────────────
 def clean_and_engineer(df: pd.DataFrame, month_name: str = "") -> pd.DataFrame:
-    df.columns = df.columns.str.lower()
+    
     print(f"\n{'='*45}")
     print(f"  Processing {month_name}")
     print(f"{'='*45}")

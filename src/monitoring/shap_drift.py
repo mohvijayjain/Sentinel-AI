@@ -136,7 +136,7 @@ def analyze_shap_drift(
         elif relative_shift < 0.25:
             severity = "LOW_SHIFT"
         elif relative_shift < 0.50:
-            severity = "MEDIUM_shift"
+            severity = "MEDIUM_SHIFT"
         elif relative_shift < 0.75:
             severity = "HIGH_SHIFT"
         else:

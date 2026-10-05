@@ -1,5 +1,6 @@
 import pandas as pd
 import json
+import logging
 import os
 
 from src.database.drift_repository import (
@@ -19,6 +20,8 @@ from src.training.orchestrator import (
 # ============================================================
 # Configuration
 # ============================================================
+
+logger = logging.getLogger(__name__)
 
 STATISTICAL_PATH = "reports/statistical_drift.csv"
 SHAP_PATH = "reports/shap_drift.csv"
@@ -55,7 +58,17 @@ def severity_score(value):
         "CRITICAL_SHIFT": 1
     }
 
-    return mapping.get(value, 0)
+    if value not in mapping:
+
+        # An unknown label means a detector and this mapping have
+        # drifted apart; warn loudly instead of silently scoring 0
+        logger.warning(
+            f"Unrecognized drift severity {value!r}; scoring as 0"
+        )
+
+        return 0
+
+    return mapping[value]
 
 
 # ============================================================

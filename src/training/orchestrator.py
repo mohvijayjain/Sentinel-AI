@@ -2,11 +2,13 @@
 
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any, Dict
 
 from src.training import retrain
 from src.training.promote import main as promote_model
 from src.database.drift_repository import insert_retraining_event
+from src.rag.monitoring_updater import upsert_retraining_event
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +31,9 @@ _REQUIRED_PROMOTION_KEYS = (
 )
 
 
-def _require_promotion_dict(promotion_result: Any) -> Dict[str, Any]:
+def _require_promotion_dict(
+    promotion_result: Any
+) -> Dict[str, Any]:
     """
     Validate the shape of promote.main()'s return value.
 
@@ -73,13 +77,17 @@ def run_retraining_pipeline(
         Promotion gates
             ↓
         Promote / Reject
+            ↓
+        Save retraining event to PostgreSQL
+            ↓
+        Index retraining event in ChromaDB
     """
 
     started_at = time.monotonic()
 
-    logger.info(_SEPARATOR)
-    logger.info("SENTINEL-AI AUTOMATED RETRAINING PIPELINE")
-    logger.info(_SEPARATOR)
+    # Capture the event timestamp once so PostgreSQL and ChromaDB
+    # can refer to the same retraining event timestamp.
+    triggered_at = datetime.now(timezone.utc).isoformat()
 
     try:
 
@@ -87,15 +95,17 @@ def run_retraining_pipeline(
         # 1. Retrain Challenger
         # --------------------------------------------------------
 
-        logger.info("Starting Challenger retraining...")
+        logger.info(
+            "Starting Challenger retraining..."
+        )
 
         retrain_result = retrain.main()
 
         run_id = retrain_result.get("run_id")
 
         if not run_id:
-            raise RuntimeError(
-                "Retraining completed but no MLflow run_id was returned."
+            raise ValueError(
+                "Retraining did not return a valid MLflow run_id."
             )
 
         logger.info(
@@ -114,7 +124,12 @@ def run_retraining_pipeline(
         promotion_result = _require_promotion_dict(
             promote_model(run_id)
         )
-        insert_retraining_event(
+
+        # --------------------------------------------------------
+        # 3. Save Retraining Event to PostgreSQL
+        # --------------------------------------------------------
+
+        event_id = insert_retraining_event(
             triggered_reason=triggered_reason,
             new_model_rmse=promotion_result["new_model_rmse"],
             champion_rmse=promotion_result["champion_rmse"],
@@ -123,30 +138,68 @@ def run_retraining_pipeline(
         )
 
         # --------------------------------------------------------
-        # 3. Final result
+        # 4. Index Retraining Event in ChromaDB
+        # --------------------------------------------------------
+
+        upsert_retraining_event(
+            event_id=event_id,
+            triggered_at=triggered_at,
+            triggered_reason=triggered_reason,
+            new_model_rmse=promotion_result["new_model_rmse"],
+            champion_rmse=promotion_result["champion_rmse"],
+            promoted=promotion_result["promoted"],
+            mlflow_run_id=promotion_result["mlflow_run_id"],
+        )
+
+        # --------------------------------------------------------
+        # 5. Final result
         # --------------------------------------------------------
 
         result = {
             "run_id": run_id,
-            "retrain_metrics": retrain_result.get("metrics", {}),
+            "retrain_metrics": retrain_result.get(
+                "metrics",
+                {}
+            ),
+            "event_id": event_id,
             "promoted": promotion_result["promoted"],
-            "mlflow_run_id": promotion_result["mlflow_run_id"],
-            "new_model_rmse": promotion_result["new_model_rmse"],
-            "new_model_mae": promotion_result["new_model_mae"],
-            "new_model_r2": promotion_result["new_model_r2"],
-            "champion_rmse": promotion_result["champion_rmse"],
-            "champion_mae": promotion_result["champion_mae"],
-            "champion_r2": promotion_result["champion_r2"],
-            "champion_version": promotion_result["champion_version"],
-            "new_version": promotion_result["new_version"],
+            "mlflow_run_id": promotion_result[
+                "mlflow_run_id"
+            ],
+            "new_model_rmse": promotion_result[
+                "new_model_rmse"
+            ],
+            "new_model_mae": promotion_result[
+                "new_model_mae"
+            ],
+            "new_model_r2": promotion_result[
+                "new_model_r2"
+            ],
+            "champion_rmse": promotion_result[
+                "champion_rmse"
+            ],
+            "champion_mae": promotion_result[
+                "champion_mae"
+            ],
+            "champion_r2": promotion_result[
+                "champion_r2"
+            ],
+            "champion_version": promotion_result[
+                "champion_version"
+            ],
+            "new_version": promotion_result[
+                "new_version"
+            ],
         }
 
     except Exception:
         elapsed = time.monotonic() - started_at
+
         logger.exception(
             "Automated retraining pipeline failed after %.1fs.",
             elapsed,
         )
+
         raise
 
     elapsed = time.monotonic() - started_at
@@ -157,14 +210,17 @@ def run_retraining_pipeline(
         logger.info(
             "AUTOMATED RETRAINING RESULT: PROMOTED"
         )
+
         logger.info(
             "New Champion version: %s",
             result["new_version"],
         )
+
     else:
         logger.warning(
             "AUTOMATED RETRAINING RESULT: REJECTED"
         )
+
         logger.warning(
             "Champion remains version %s",
             result["champion_version"],
@@ -174,6 +230,7 @@ def run_retraining_pipeline(
         "Pipeline completed in %.1fs.",
         elapsed,
     )
+
     logger.info(_SEPARATOR)
 
     return result

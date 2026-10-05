@@ -1,5 +1,5 @@
 feature,ref_importance,cur_importance,absolute_shift,relative_shift_%,direction,ref_rank,cur_rank,rank_shift,is_drifted,severity
-pickup_month,24.679089,15.158294,9.520795,38.58,DECREASED,7,8,1,True,MEDIUM_shift
+pickup_month,24.679089,15.158294,9.520795,38.58,DECREASED,7,8,1,True,MEDIUM_SHIFT
 is_rush_hour,4.959103,4.515264,0.443839,8.95,DECREASED,9,9,0,False,STABLE
 is_weekend,24.218447,22.503065,1.715382,7.08,DECREASED,8,7,1,False,STABLE
 pickup_day_of_week,55.105794,51.760365,3.345429,6.07,DECREASED,6,6,0,False,STABLE

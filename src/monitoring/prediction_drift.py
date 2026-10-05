@@ -9,6 +9,8 @@ warnings.filterwarnings("ignore")
 from scipy.stats import ks_2samp, wasserstein_distance
 from scipy.spatial.distance import jensenshannon
 
+from src.monitoring.stastical_drift import get_psi_severity
+
 
 # ============================================================
 # Configuration
@@ -33,10 +35,6 @@ FEATURES = [
     "VendorID",
     "RatecodeID",
 ]
-
-
-# PSI threshold
-PSI_THRESHOLD = 0.25
 
 
 # ============================================================
@@ -234,14 +232,9 @@ def run_prediction_drift(
     )
 
 
-    drifted = psi >= PSI_THRESHOLD
-
-
-    severity = (
-        "DRIFT"
-        if drifted
-        else "NO_DRIFT"
-    )
+    # Graded PSI severity, same bands as the statistical detector,
+    # so the scorer can map it (a binary "DRIFT" label scored 0)
+    severity = get_psi_severity(psi)
 
 
     results = {
