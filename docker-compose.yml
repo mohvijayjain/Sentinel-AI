@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
 
   # -----------------------------
@@ -45,10 +43,13 @@ services:
 
     restart: unless-stopped
 
+    # Credentials come from .env (see .env.example). The defaults are
+    # non-secret local placeholders only; POSTGRES_PASSWORD is applied
+    # by the image only when the data volume is first initialised.
     environment:
-      POSTGRES_USER: sentinel
-      POSTGRES_PASSWORD: sentinel123
-      POSTGRES_DB: sentinel_db
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme-local}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel_db}
 
     ports:
       - "5432:5432"
@@ -57,7 +58,8 @@ services:
       - postgres_data:/var/lib/postgresql/data
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U sentinel -d sentinel_db"]
+      # $$ defers expansion to the container, where the vars are set
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -87,8 +89,10 @@ services:
       - 0.0.0.0
       - --port
       - "5000"
-      - --backend-store-uri
-      - postgresql://sentinel:sentinel123@postgres:5432/sentinel_db
+      # The backend store URI (which carries the DB password) is passed
+      # through MLFLOW_BACKEND_STORE_URI below, not as an argument, so it
+      # does not appear in the process list. mlflow server reads it via
+      # its --backend-store-uri envvar (verified on MLflow 3.15.2).
       - --default-artifact-root
       - /mlflow/artifacts
 
@@ -98,6 +102,8 @@ services:
     
     environment:
       MLFLOW_SERVER_ALLOWED_HOSTS: "mlflow:5000,localhost:5000,127.0.0.1:5000"
+      # Built from the same .env vars as the postgres service
+      MLFLOW_BACKEND_STORE_URI: "postgresql://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-changeme-local}@postgres:5432/${POSTGRES_DB:-sentinel_db}"
 
     volumes:
       - mlflow_artifacts:/mlflow/artifacts

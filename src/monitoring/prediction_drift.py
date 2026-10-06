@@ -85,24 +85,38 @@ def generate_predictions(
 
 
 # ============================================================
-# PSI Calculation
+# Shared Binning (PSI and JS)
 # ============================================================
 
-def calculate_psi(
+def _binned_counts(
     reference,
     current,
     bins=10
 ):
+    """
+    Histogram reference and current on the SAME edges: equal-width over
+    the reference range, with the outer edges opened to -inf / +inf so
+    current values outside the reference range land in the edge bins
+    instead of being dropped by np.histogram (same convention as
+    stastical_drift.calculate_psi). NaN values are ignored.
 
-    reference = pd.Series(reference)
-    current = pd.Series(current)
+    Returns (reference_counts, current_counts), or None when either side
+    has no usable values.
+    """
 
+    reference = pd.Series(reference).dropna()
+    current = pd.Series(current).dropna()
+
+    if len(reference) == 0 or len(current) == 0:
+        return None
 
     bin_edges = np.histogram_bin_edges(
         reference,
         bins=bins
     )
 
+    bin_edges[0] = -np.inf
+    bin_edges[-1] = np.inf
 
     reference_counts, _ = np.histogram(
         reference,
@@ -113,6 +127,34 @@ def calculate_psi(
         current,
         bins=bin_edges
     )
+
+    return reference_counts, current_counts
+
+
+
+# ============================================================
+# PSI Calculation
+# ============================================================
+
+def calculate_psi(
+    reference,
+    current,
+    bins=10
+):
+
+    counts = _binned_counts(
+        reference,
+        current,
+        bins
+    )
+
+
+    # Nothing to compare: NaN, which the scorer refuses to score as 0
+    if counts is None:
+        return np.nan
+
+
+    reference_counts, current_counts = counts
 
 
     epsilon = 1e-10
@@ -153,22 +195,20 @@ def calculate_js(
     bins=10
 ):
 
-    bin_edges = np.histogram_bin_edges(
+    # Same bins as PSI, so out-of-range values count here too
+    counts = _binned_counts(
         reference,
-        bins=bins
-    )
-
-
-    reference_counts, _ = np.histogram(
-        reference,
-        bins=bin_edges
-    )
-
-
-    current_counts, _ = np.histogram(
         current,
-        bins=bin_edges
+        bins
     )
+
+
+    # Nothing to compare: NaN, as for PSI
+    if counts is None:
+        return np.nan
+
+
+    reference_counts, current_counts = counts
 
 
     epsilon = 1e-10

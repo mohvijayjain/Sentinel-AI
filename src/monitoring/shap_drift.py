@@ -27,9 +27,7 @@ FEATURES = [
     "RatecodeID",
 ]
 
-IGNORED_FEATURES=[
-    "pickup_month"
-]
+from src.monitoring.constants import IGNORED_FEATURES
 
 #Thresholds
 

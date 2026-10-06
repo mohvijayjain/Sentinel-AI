@@ -1,9 +1,15 @@
+import logging
 from datetime import datetime
 from sqlalchemy import text
 
 import pandas as pd
 
 from src.database.postgres import engine
+
+from src.common.error_redaction import safe_error_message
+
+
+logger = logging.getLogger(__name__)
 
 
 
@@ -154,7 +160,10 @@ def insert_monitoring_run(
 
         run_id = result.scalar_one()
 
-    print(f"✅ Monitoring run saved: {run_id}")
+    # ASCII log line, not an emoji print: after the commit, success
+    # reporting must never be able to raise (e.g. UnicodeEncodeError on a
+    # cp1252 / piped stdout) and turn a saved row into a reported failure.
+    logger.info("Monitoring run inserted successfully: run_id=%s", run_id)
 
     return run_id
     
@@ -235,26 +244,51 @@ def insert_retraining_event(
     new_model_rmse,
     champion_rmse,
     promoted,
-    mlflow_run_id
+    mlflow_run_id,
+    *,
+    triggered_at,
+    status,
+    error_message=None
 ):
+    """
+    Persist one retraining attempt.
+
+    triggered_at is the caller's canonical ISO-8601 UTC timestamp for the
+    attempt; it is stored as UTC wall-clock time in the TIMESTAMP column
+    (independent of the session time zone), never replaced by NOW().
+    status is 'promoted', 'rejected' or 'failed'.
+
+    error_message is re-sanitized here (secrets redacted, bounded) as
+    defense in depth; idempotent, so an already-safe message is stored
+    unchanged.
+    """
+
+    if error_message is not None:
+        error_message = safe_error_message(error_message)
 
     query = text("""
         INSERT INTO retraining_events
         (
+            triggered_at,
             triggered_reason,
             new_model_rmse,
             champion_rmse,
             promoted,
-            mlflow_run_id
+            mlflow_run_id,
+            status,
+            error_message
         )
 
         VALUES
         (
+            CAST(:triggered_at AS TIMESTAMPTZ) AT TIME ZONE 'UTC',
             :triggered_reason,
             :new_model_rmse,
             :champion_rmse,
             :promoted,
-            :mlflow_run_id
+            :mlflow_run_id,
+            :status,
+            :error_message
         )
 
         RETURNING id
@@ -265,19 +299,23 @@ def insert_retraining_event(
         result = conn.execute(
             query,
             {
+                "triggered_at": triggered_at,
                 "triggered_reason": triggered_reason,
                 "new_model_rmse": new_model_rmse,
                 "champion_rmse": champion_rmse,
                 "promoted": promoted,
-                "mlflow_run_id": mlflow_run_id
+                "mlflow_run_id": mlflow_run_id,
+                "status": status,
+                "error_message": error_message
             }
         )
 
         event_id = result.scalar_one()
 
-    print(
-        f"✅ Retraining event saved to PostgreSQL: "
-        f"event_id={event_id}"
+    # See insert_monitoring_run: success reporting cannot fail post-commit
+    logger.info(
+        "Retraining event inserted successfully: event_id=%s",
+        event_id,
     )
 
     return event_id

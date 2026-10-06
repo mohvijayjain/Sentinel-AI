@@ -17,6 +17,7 @@ Design contract
 import logging
 from typing import Optional
 
+from src.common.error_redaction import redacted_traceback, safe_error_message
 from src.rag.chroma_store import ChromaStore
 from src.rag.embeddings import embed_passages
 
@@ -71,32 +72,44 @@ def build_monitoring_document(
 # Retraining Event Document
 # ============================================================
 
+RETRAINING_STATUSES = frozenset({"promoted", "rejected", "failed"})
+
+
+def _format_rmse(value: Optional[float]) -> str:
+    return "not available" if value is None else f"{float(value):.3f}"
+
+
 def build_retraining_document(
     event_id: int,
     triggered_at: str,
     triggered_reason: str,
-    new_model_rmse: float,
-    champion_rmse: float,
-    promoted: bool,
-    mlflow_run_id: str,
+    new_model_rmse: Optional[float],
+    champion_rmse: Optional[float],
+    status: str,
+    mlflow_run_id: Optional[str],
+    error_message: Optional[str] = None,
 ) -> str:
     """
     Convert a retraining event into searchable RAG text.
 
-    Pure function: no I/O.
+    Pure function: no I/O. A failed attempt has no metrics (and may have
+    no MLflow run), so those render as "not available".
     """
 
-    decision = "PROMOTED" if promoted else "REJECTED"
-
-    return (
+    document = (
         f"Sentinel-AI Retraining Event {event_id}.\n"
         f"Triggered at: {triggered_at}.\n"
         f"Triggered reason: {triggered_reason}.\n"
-        f"Challenger model RMSE: {new_model_rmse:.3f}.\n"
-        f"Champion model RMSE: {champion_rmse:.3f}.\n"
-        f"Promotion decision: {decision}.\n"
-        f"MLflow run ID: {mlflow_run_id}."
+        f"Challenger model RMSE: {_format_rmse(new_model_rmse)}.\n"
+        f"Champion model RMSE: {_format_rmse(champion_rmse)}.\n"
+        f"Promotion decision: {status.upper()}.\n"
+        f"MLflow run ID: {mlflow_run_id or 'not available'}."
     )
+
+    if error_message:
+        document += f"\nFailure: {error_message}"
+
+    return document
 
 # ============================================================
 # Index one run (best-effort write-through)
@@ -160,12 +173,14 @@ def upsert_monitoring_run(
         logger.info("Monitoring run indexed in ChromaDB: %s", run_id)
         return True
 
-    except Exception:
+    except Exception as error:
         # Postgres already holds the truth; the index can be rebuilt.
-        logger.exception(
+        # NVIDIA / Chroma errors can echo credentials: redacted traceback.
+        logger.error(
             "Failed to index monitoring run %s; "
-            "Postgres remains the source of truth.",
+            "Postgres remains the source of truth.\n%s",
             run_id,
+            redacted_traceback(error),
         )
         return False
     
@@ -177,16 +192,22 @@ def upsert_retraining_event(
     event_id: int,
     triggered_at: str,
     triggered_reason: str,
-    new_model_rmse: float,
-    champion_rmse: float,
-    promoted: bool,
-    mlflow_run_id: str,
+    new_model_rmse: Optional[float],
+    champion_rmse: Optional[float],
+    promoted: Optional[bool],
+    mlflow_run_id: Optional[str],
+    *,
+    status: str,
+    error_message: Optional[str] = None,
 ) -> bool:
     """
     Embed one retraining event and upsert it into ChromaDB.
 
     PostgreSQL remains the source of truth.
     ChromaDB is only the derived semantic-search index.
+
+    status is 'promoted', 'rejected' or 'failed'. A failed attempt has
+    no metrics; None fields are left out of the metadata.
 
     Returns True on success and False on failure.
     Never raises into the training pipeline.
@@ -204,15 +225,52 @@ def upsert_retraining_event(
                 "triggered_reason is required."
             )
 
+        if status not in RETRAINING_STATUSES:
+            raise ValueError(
+                f"Unknown retraining status {status!r}."
+            )
+
+        # Never embed a raw secret; idempotent for already-safe text
+        if error_message is not None:
+            error_message = safe_error_message(error_message)
+
         document = build_retraining_document(
             event_id=event_id,
             triggered_at=str(triggered_at),
             triggered_reason=str(triggered_reason),
-            new_model_rmse=float(new_model_rmse),
-            champion_rmse=float(champion_rmse),
-            promoted=bool(promoted),
-            mlflow_run_id=str(mlflow_run_id),
+            new_model_rmse=new_model_rmse,
+            champion_rmse=champion_rmse,
+            status=status,
+            mlflow_run_id=mlflow_run_id,
+            error_message=error_message,
         )
+
+        metadata = {
+            "source": "retraining_events",
+            "event_id": int(event_id),
+            "triggered_at": str(triggered_at),
+            "triggered_reason": str(triggered_reason),
+            "status": status,
+            "promoted": promoted,
+            "new_model_rmse": new_model_rmse,
+            "champion_rmse": champion_rmse,
+            "mlflow_run_id": mlflow_run_id,
+            "error_message": error_message,
+        }
+
+        # Chroma metadata values cannot be None
+        metadata = {
+            key: value
+            for key, value in metadata.items()
+            if value is not None
+        }
+
+        for key in ("new_model_rmse", "champion_rmse"):
+            if key in metadata:
+                metadata[key] = float(metadata[key])
+
+        if "promoted" in metadata:
+            metadata["promoted"] = bool(metadata["promoted"])
 
         embedding = embed_passages(
             [document]
@@ -225,23 +283,7 @@ def upsert_retraining_event(
                 f"retraining_event:{event_id}"
             ],
             metadatas=[
-                {
-                    "source": "retraining_events",
-                    "event_id": int(event_id),
-                    "triggered_reason": str(
-                        triggered_reason
-                    ),
-                    "promoted": bool(promoted),
-                    "new_model_rmse": float(
-                        new_model_rmse
-                    ),
-                    "champion_rmse": float(
-                        champion_rmse
-                    ),
-                    "mlflow_run_id": str(
-                        mlflow_run_id
-                    ),
-                }
+                metadata
             ],
         )
 
@@ -252,12 +294,14 @@ def upsert_retraining_event(
 
         return True
 
-    except Exception:
+    except Exception as error:
 
-        logger.exception(
+        # NVIDIA / Chroma errors can echo credentials: redacted traceback
+        logger.error(
             "Failed to index retraining event %s; "
-            "Postgres remains the source of truth.",
+            "Postgres remains the source of truth.\n%s",
             event_id,
+            redacted_traceback(error),
         )
 
         return False

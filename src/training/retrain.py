@@ -28,6 +28,7 @@ from src.training.dataset import (
 )
 
 from src.training.mlflow_logger import MLflowLogger
+from src.training.mlflow_names import MLFLOW_EXPERIMENT_NAME
 
 
 # ============================================================
@@ -48,7 +49,7 @@ logger = logging.getLogger(__name__)
 
 TARGET = "trip_duration"
 
-EXPERIMENT_NAME = "Sentinel-AI"
+EXPERIMENT_NAME = MLFLOW_EXPERIMENT_NAME
 
 SAMPLE_SIZE = 1_000_000
 

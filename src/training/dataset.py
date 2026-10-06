@@ -50,18 +50,40 @@ FROZEN_TEST_SIZE = 200_000
 # comparison ever made against it.
 SEED = 42
 
-# The processed Parquet files on disk were written before preprocess.py
-# started lower-casing column names, so they still carry the original CamelCase
-# for these four. This is exactly the aliasing the previous SQL loader did
-# (`"PULocationID" AS pulocationid`, ...) — a pure rename, no feature logic.
-COLUMN_ALIASES = {
-    "PULocationID": "pulocationid",
-    "DOLocationID": "dolocationid",
-    "VendorID": "vendorid",
-    "RatecodeID": "ratecodeid",
-}
-
+# Files on disk do not agree on the case of four columns: the processed
+# Parquet carries CamelCase (PULocationID, DOLocationID, VendorID, RatecodeID)
+# while frozen_test.parquet was written lower-case. Columns are therefore
+# matched case-insensitively and renamed to the spelling FEATURES uses — a
+# pure rename, no feature logic, the same alignment promote._prepare_features
+# does. The frozen test's data is untouched, so past comparisons stay valid.
 REQUIRED_COLUMNS = FEATURES + [TARGET]
+
+
+def _canonical_names(names) -> dict[str, str]:
+    """
+    Map each required column (spelled as in FEATURES / TARGET, plus
+    ROW_KEY) -> its name in `names`, matched case-insensitively. Columns
+    that are absent are simply left out.
+    """
+
+    by_lower: dict[str, str] = {}
+
+    for name in names:
+        key = name.lower()
+
+        if key in by_lower and by_lower[key] != name:
+            raise ValueError(
+                f"Ambiguous columns differing only by case: "
+                f"{by_lower[key]!r} and {name!r}"
+            )
+
+        by_lower[key] = name
+
+    return {
+        column: by_lower[column.lower()]
+        for column in REQUIRED_COLUMNS + [ROW_KEY]
+        if column.lower() in by_lower
+    }
 
 
 # ── Deterministic hashing ──────────────────────────────
@@ -90,16 +112,11 @@ def _row_keys(month: int, index: pd.Index) -> np.ndarray:
 
 
 def _ondisk_names(path: Path) -> dict[str, str]:
-    """Map canonical (lowercase) column name -> the name used on disk."""
+    """Map canonical column name (as in FEATURES) -> the name used on disk."""
 
     import pyarrow.parquet as pq
 
-    names = pq.ParquetFile(path).schema_arrow.names
-
-    return {
-        COLUMN_ALIASES.get(name, name.lower()): name
-        for name in names
-    }
+    return _canonical_names(pq.ParquetFile(path).schema_arrow.names)
 
 
 def _check_source_files() -> None:
@@ -248,6 +265,14 @@ def load_frozen_test() -> pd.DataFrame:
         )
 
     frame = pd.read_parquet(FROZEN_TEST_PATH)
+
+    # Pure rename to the FEATURES spelling (the file is lower-case)
+    frame = frame.rename(
+        columns={
+            ondisk: canonical
+            for canonical, ondisk in _canonical_names(frame.columns).items()
+        }
+    )
 
     missing = [
         column

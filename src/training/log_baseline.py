@@ -11,6 +11,12 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from src.training.dataset import load_frozen_test
 from src.training.mlflow_logger import MLflowLogger
+from src.common.error_redaction import redacted_traceback
+from src.training.mlflow_names import (
+    CHAMPION_ALIAS,
+    MLFLOW_EXPERIMENT_NAME,
+    MLFLOW_REGISTERED_MODEL_NAME,
+)
 
 
 # ============================================================
@@ -19,8 +25,8 @@ from src.training.mlflow_logger import MLflowLogger
 
 load_dotenv()
 
-MODEL_NAME = "sentinel-ai-champion"
-EXPERIMENT_NAME = "Sentinel-AI"
+MODEL_NAME = MLFLOW_REGISTERED_MODEL_NAME
+EXPERIMENT_NAME = MLFLOW_EXPERIMENT_NAME
 
 
 # ============================================================
@@ -410,7 +416,7 @@ def log_baseline_model():
 
     logger.info(
         "Champion alias: %s",
-        "Champion",
+        CHAMPION_ALIAS,
     )
 
     logger.info(
@@ -450,10 +456,12 @@ if __name__ == "__main__":
 
         log_baseline_model()
 
-    except Exception:
+    except Exception as exc:
 
-        logger.exception(
-            "Failed to bootstrap Champion model"
+        # MLflow errors can embed tracking URIs with credentials
+        logger.error(
+            "Failed to bootstrap Champion model\n%s",
+            redacted_traceback(exc),
         )
 
         raise

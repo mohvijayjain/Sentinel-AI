@@ -5,6 +5,11 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict
 
+from src.common.error_redaction import (
+    ERROR_MESSAGE_MAX_LENGTH,
+    redacted_traceback,
+    safe_error_message,
+)
 from src.training import retrain
 from src.training.promote import main as promote_model
 from src.database.drift_repository import insert_retraining_event
@@ -63,6 +68,100 @@ def _require_promotion_dict(
     return promotion_result
 
 
+# ERROR_MESSAGE_MAX_LENGTH (imported above) matches the CHECK on
+# retraining_events.error_message
+
+
+def _canonical_triggered_at() -> str:
+    """
+    The one ISO-8601 UTC timestamp for a retraining attempt. Called once
+    at the start of the attempt; PostgreSQL and ChromaDB both receive
+    exactly this value, whatever the outcome.
+
+    Convention: retraining_events.triggered_at represents UTC (see
+    Sentinel.sql and migrations/001_retraining_events_status.sql).
+    """
+
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _bounded_error_message(error: BaseException) -> str:
+    """
+    '<Type>: <message>' on one line, secrets redacted, capped for the DB
+    column. Builds a new string; the exception itself is never modified.
+    """
+
+    return safe_error_message(
+        f"{type(error).__name__}: {error}"
+    )
+
+
+def _record_failed_attempt(
+    triggered_reason: str,
+    triggered_at: str,
+    run_id: Any,
+    error: BaseException,
+):
+    """
+    Persist a failed attempt for audit: PostgreSQL first, then ChromaDB.
+
+    No metrics are invented; mlflow_run_id is only set when retraining
+    produced a real run before the failure. Never raises, so the caller
+    can always re-raise the original error.
+    """
+
+    error_message = _bounded_error_message(error)
+
+    try:
+
+        event_id = insert_retraining_event(
+            triggered_reason=triggered_reason,
+            new_model_rmse=None,
+            champion_rmse=None,
+            promoted=None,
+            mlflow_run_id=run_id or None,
+            triggered_at=triggered_at,
+            status="failed",
+            error_message=error_message,
+        )
+
+    except Exception as insert_error:
+
+        # Not persisted, so not indexed either. Traceback is logged
+        # redacted: logger.exception would emit the raw message.
+        logger.error(
+            "Could not record failed retraining attempt in PostgreSQL.\n%s",
+            redacted_traceback(insert_error),
+        )
+
+        return None
+
+    try:
+
+        upsert_retraining_event(
+            event_id=event_id,
+            triggered_at=triggered_at,
+            triggered_reason=triggered_reason,
+            new_model_rmse=None,
+            champion_rmse=None,
+            promoted=None,
+            mlflow_run_id=run_id or None,
+            status="failed",
+            error_message=error_message,
+        )
+
+    except Exception as index_error:
+
+        logger.error(
+            "Could not index failed retraining event %s in ChromaDB; "
+            "PostgreSQL row is intact.\n%s",
+            event_id,
+            redacted_traceback(index_error),
+        )
+
+    return event_id
+
+
 def run_retraining_pipeline(
     triggered_reason: str = "manual_retraining"
 ) -> dict:
@@ -85,48 +184,74 @@ def run_retraining_pipeline(
 
     started_at = time.monotonic()
 
-    # Capture the event timestamp once so PostgreSQL and ChromaDB
-    # can refer to the same retraining event timestamp.
-    triggered_at = datetime.now(timezone.utc).isoformat()
+    # One canonical timestamp per attempt, taken at the start, shared by
+    # PostgreSQL and ChromaDB for promoted, rejected and failed events.
+    triggered_at = _canonical_triggered_at()
+
+    run_id = None
 
     try:
 
-        # --------------------------------------------------------
-        # 1. Retrain Challenger
-        # --------------------------------------------------------
+        try:
 
-        logger.info(
-            "Starting Challenger retraining..."
-        )
+            # ----------------------------------------------------
+            # 1. Retrain Challenger
+            # ----------------------------------------------------
 
-        retrain_result = retrain.main()
-
-        run_id = retrain_result.get("run_id")
-
-        if not run_id:
-            raise ValueError(
-                "Retraining did not return a valid MLflow run_id."
+            logger.info(
+                "Starting Challenger retraining..."
             )
 
-        logger.info(
-            "Challenger training completed | run_id=%s",
-            run_id,
-        )
+            retrain_result = retrain.main()
 
-        # --------------------------------------------------------
-        # 2. Evaluate Challenger + Promotion Gates
-        # --------------------------------------------------------
+            run_id = retrain_result.get("run_id")
 
-        logger.info(
-            "Starting Challenger evaluation and promotion gates..."
-        )
+            if not run_id:
+                raise ValueError(
+                    "Retraining did not return a valid MLflow run_id."
+                )
 
-        promotion_result = _require_promotion_dict(
-            promote_model(run_id)
+            logger.info(
+                "Challenger training completed | run_id=%s",
+                run_id,
+            )
+
+            # ----------------------------------------------------
+            # 2. Evaluate Challenger + Promotion Gates
+            # ----------------------------------------------------
+
+            logger.info(
+                "Starting Challenger evaluation and promotion gates..."
+            )
+
+            promotion_result = _require_promotion_dict(
+                promote_model(run_id)
+            )
+
+        except Exception as error:
+
+            # Make the failed attempt auditable, then re-raise it
+            _record_failed_attempt(
+                triggered_reason,
+                triggered_at,
+                run_id,
+                error,
+            )
+
+            raise
+
+        status = (
+            "promoted"
+            if promotion_result["promoted"]
+            else "rejected"
         )
 
         # --------------------------------------------------------
         # 3. Save Retraining Event to PostgreSQL
+        #
+        # Outside the failure handler above: if this insert fails the
+        # error propagates without a second ("failed") row, since the
+        # attempt itself completed and may already have promoted.
         # --------------------------------------------------------
 
         event_id = insert_retraining_event(
@@ -135,6 +260,8 @@ def run_retraining_pipeline(
             champion_rmse=promotion_result["champion_rmse"],
             promoted=promotion_result["promoted"],
             mlflow_run_id=promotion_result["mlflow_run_id"],
+            triggered_at=triggered_at,
+            status=status,
         )
 
         # --------------------------------------------------------
@@ -149,6 +276,7 @@ def run_retraining_pipeline(
             champion_rmse=promotion_result["champion_rmse"],
             promoted=promotion_result["promoted"],
             mlflow_run_id=promotion_result["mlflow_run_id"],
+            status=status,
         )
 
         # --------------------------------------------------------
@@ -192,12 +320,15 @@ def run_retraining_pipeline(
             ],
         }
 
-    except Exception:
+    except Exception as pipeline_error:
         elapsed = time.monotonic() - started_at
 
-        logger.exception(
-            "Automated retraining pipeline failed after %.1fs.",
+        # Redacted traceback instead of logger.exception (raw message);
+        # the original exception object is re-raised untouched
+        logger.error(
+            "Automated retraining pipeline failed after %.1fs.\n%s",
             elapsed,
+            redacted_traceback(pipeline_error),
         )
 
         raise

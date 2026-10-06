@@ -16,7 +16,11 @@ from src.training.orchestrator import (
     run_retraining_pipeline
 )
 
-from src.monitoring.shap_drift import (
+from src.common.error_redaction import (
+    describe_error
+)
+
+from src.monitoring.constants import (
     IGNORED_FEATURES as SHAP_IGNORED_FEATURES
 )
 
@@ -37,6 +41,23 @@ WEIGHTS = {
     "shap": 0.3,
     "prediction": 0.3
 }
+
+# TODO(design, deferred): Should pure concept/prediction drift be able
+# to trigger retraining?
+#
+# With these weights and the get_action() bands (RETRAIN >= 0.75), SHAP +
+# prediction without statistical drift caps at 0.60 (ALERT), so RETRAIN
+# effectively requires statistical drift of at least MEDIUM. This may be
+# deliberate. Not changed here; points to review together:
+#   - prediction drift alone as a trigger
+#   - SHAP drift alone as a trigger
+#   - combined SHAP + prediction as a trigger
+#   - statistical drift as a mandatory gate (the current effect)
+#   - false-positive retrain risk
+#   - retrain cost (Optuna search, MLflow runs, promotion gates)
+#   - seasonal reference strategy (cf. pickup_month handling)
+#   - champion/challenger safeguards already limiting bad promotions
+#   - whether a separate concept-drift action should exist
 
 
 # ============================================================
@@ -76,12 +97,72 @@ def severity_score(value):
 
 
 # ============================================================
+# Load Drift Report
+# ============================================================
+
+def read_drift_report(path):
+    """
+    Load a detector report. A missing, zero-byte or zero-row report
+    means that detector produced no signal: warn and return None so
+    the caller scores it as 0 instead of crashing the pipeline.
+    """
+
+    try:
+
+        df = pd.read_csv(path)
+
+    except FileNotFoundError:
+
+        logger.warning(
+            f"Missing drift report {path!r}; scoring as 0."
+        )
+
+        return None
+
+    except pd.errors.EmptyDataError:
+
+        df = pd.DataFrame()
+
+    if len(df) == 0:
+
+        logger.warning(
+            f"Empty drift report {path!r}; scoring as 0."
+        )
+
+        return None
+
+    return df
+
+
+def check_psi_not_nan(df, path):
+    """
+    A NaN PSI is corrupt detector output, not "no drift". Unlike an
+    empty report it must not be scored as 0, so raise instead.
+    """
+
+    if df["psi"].isna().any():
+
+        raise ValueError(
+            f"PSI is NaN; drift report {path!r} "
+            f"contains invalid PSI data."
+        )
+
+
+# ============================================================
 # Statistical Drift Score
 # ============================================================
 
 def calculate_statistical_score():
 
-    df = pd.read_csv(
+    df = read_drift_report(
+        STATISTICAL_PATH
+    )
+
+    if df is None:
+        return 0
+
+    check_psi_not_nan(
+        df,
         STATISTICAL_PATH
     )
 
@@ -105,9 +186,12 @@ def calculate_statistical_score():
 
 def calculate_shap_score():
 
-    df = pd.read_csv(
+    df = read_drift_report(
         SHAP_PATH
     )
+
+    if df is None:
+        return 0
 
     # The detector's is_drifted is authoritative; features the
     # detector ignores never contribute, matching its own retrain logic
@@ -137,7 +221,16 @@ def calculate_shap_score():
 
 def calculate_prediction_score():
 
-    df = pd.read_csv(
+    df = read_drift_report(
+        PREDICTION_PATH
+    )
+
+    if df is None:
+        return 0
+
+    # Only row 0 is scored, so only its PSI is checked
+    check_psi_not_nan(
+        df.iloc[[0]],
         PREDICTION_PATH
     )
 
@@ -313,9 +406,13 @@ if __name__ == "__main__":
     # Save statistical drift scores
     # --------------------------------------------------------
 
-    statistical_df = pd.read_csv(
+    statistical_df = read_drift_report(
         STATISTICAL_PATH
     )
+
+    # No statistical report: nothing to persist, keep the run going
+    if statistical_df is None:
+        statistical_df = pd.DataFrame()
 
     insert_drift_scores(
         statistical_df
@@ -420,8 +517,9 @@ if __name__ == "__main__":
 
         except Exception as exc:
 
+            # Type + redacted message only; raw str(exc) may hold secrets
             print(
-                f"\n❌ Retraining pipeline failed: {exc}"
+                f"\n❌ Retraining pipeline failed: {describe_error(exc)}"
             )
 
             print(

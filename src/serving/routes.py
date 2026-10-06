@@ -54,13 +54,25 @@ def predict(
     request: Request,
     x_api_key: str = Header(default=None)
 ):
-    logger.info(f"Received API Key: {x_api_key}")
-    logger.info(f"Expected API Key: {API_KEY}")
-    if x_api_key !=API_KEY:
+    # Never log the received or expected key, nor any header: only the
+    # outcome of the attempt. Comparison and status codes are unchanged.
+    # API_KEY None (unset) must never match a missing header (None)
+    if API_KEY is None or x_api_key !=API_KEY:
+        logger.warning(
+            "API authentication failure | %s %s | reason=%s | status=401",
+            request.method,
+            request.url.path,
+            "missing" if x_api_key is None else "invalid",
+        )
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key"
         )
+    logger.info(
+        "API authentication success | %s %s",
+        request.method,
+        request.url.path,
+    )
     return predict_trip(
         data = data,
         model = request.app.state.model,

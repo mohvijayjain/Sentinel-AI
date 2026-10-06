@@ -59,18 +59,43 @@ CREATE INDEX IF NOT EXISTS idx_drift_events_detected_at
 -- Retraining events
 -- ============================================================
 
+-- Convention: triggered_at represents UTC (wall-clock, TIMESTAMP WITHOUT
+-- TIME ZONE). The orchestrator always writes it explicitly from one
+-- canonical UTC timestamp per attempt; the default is UTC as well.
+--
+-- status: 'promoted' | 'rejected' | 'failed'. A failed attempt has
+-- promoted = NULL (never evaluated), NULL metrics and an error_message
+-- that is sanitized and bounded to 500 chars.
+--
+-- This CREATE covers a brand-new database. An EXISTING database created
+-- before status / error_message existed is NOT changed by it (IF NOT
+-- EXISTS skips the table): run migrations/001_retraining_events_status.sql.
+
 CREATE TABLE IF NOT EXISTS retraining_events (
     id                SERIAL PRIMARY KEY,
-    triggered_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    triggered_at      TIMESTAMP NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
     triggered_reason  TEXT,
     new_model_rmse    FLOAT,
     champion_rmse     FLOAT,
     promoted          BOOLEAN,
-    mlflow_run_id     TEXT
+    mlflow_run_id     TEXT,
+    status            TEXT DEFAULT NULL
+        CHECK (status IN ('promoted', 'rejected', 'failed')),
+    error_message     TEXT
+        CHECK (char_length(error_message) <= 500)
 );
 
 CREATE INDEX IF NOT EXISTS idx_retraining_events_triggered_at
     ON retraining_events (triggered_at DESC);
+
+COMMENT ON COLUMN retraining_events.triggered_at IS
+    'Start of the retraining attempt. Represents UTC wall-clock time '
+    '(TIMESTAMP WITHOUT TIME ZONE). Rows written before migration 001 '
+    'used server-local NOW(); see migrations/001_retraining_events_status.sql.';
+
+-- status / error_message comments are set by migration 001, not here:
+-- this file must stay re-runnable on a legacy table that does not have
+-- those columns yet (COMMENT ON a missing column is an error).
 
 
 -- ============================================================

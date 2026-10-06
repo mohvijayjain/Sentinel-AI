@@ -52,6 +52,50 @@ NVIDIA_MODEL = os.getenv(
     "nvidia/nemotron-3.5-lightning-30b-a3b",
 )
 
+# Bounded LLM latency for one /chat answer. Worst case:
+#     timeout * (1 + max_retries) + max_retries * retry_delay
+#   = 25 * (1 + 1) + 1 * 2 = 52s with the defaults below,
+# and validate_config() rejects any override above the 60s ceiling.
+# Without this the OpenAI SDK defaults (600s timeout, 2 retries) applied.
+NVIDIA_LLM_TIMEOUT_SECONDS = float(
+    os.getenv(
+        "NVIDIA_LLM_TIMEOUT_SECONDS",
+        "25",
+    )
+)
+
+NVIDIA_LLM_MAX_RETRIES = int(
+    os.getenv(
+        "NVIDIA_LLM_MAX_RETRIES",
+        "1",
+    )
+)
+
+NVIDIA_LLM_RETRY_DELAY_SECONDS = float(
+    os.getenv(
+        "NVIDIA_LLM_RETRY_DELAY_SECONDS",
+        "2",
+    )
+)
+
+LLM_LATENCY_CEILING_SECONDS = 60.0
+
+
+def llm_worst_case_seconds(
+    timeout: float = None,
+    max_retries: int = None,
+    retry_delay: float = None,
+) -> float:
+    """Worst-case total LLM time for one answer, all attempts included."""
+
+    timeout = NVIDIA_LLM_TIMEOUT_SECONDS if timeout is None else timeout
+    max_retries = NVIDIA_LLM_MAX_RETRIES if max_retries is None else max_retries
+    retry_delay = (
+        NVIDIA_LLM_RETRY_DELAY_SECONDS if retry_delay is None else retry_delay
+    )
+
+    return timeout * (1 + max_retries) + max_retries * retry_delay
+
 
 # ============================================================
 # Embeddings — NVIDIA
@@ -134,6 +178,25 @@ def validate_config() -> None:
     if not NVIDIA_MODEL:
         raise RuntimeError(
             "NVIDIA_MODEL is not configured."
+        )
+
+    if NVIDIA_LLM_TIMEOUT_SECONDS <= 0:
+        raise ValueError(
+            "NVIDIA_LLM_TIMEOUT_SECONDS must be greater than 0."
+        )
+
+    if NVIDIA_LLM_MAX_RETRIES < 0 or NVIDIA_LLM_RETRY_DELAY_SECONDS < 0:
+        raise ValueError(
+            "NVIDIA_LLM_MAX_RETRIES and NVIDIA_LLM_RETRY_DELAY_SECONDS "
+            "cannot be negative."
+        )
+
+    if llm_worst_case_seconds() > LLM_LATENCY_CEILING_SECONDS:
+        raise ValueError(
+            f"LLM worst-case latency {llm_worst_case_seconds():.0f}s exceeds "
+            f"the {LLM_LATENCY_CEILING_SECONDS:.0f}s ceiling: lower "
+            "NVIDIA_LLM_TIMEOUT_SECONDS, NVIDIA_LLM_MAX_RETRIES or "
+            "NVIDIA_LLM_RETRY_DELAY_SECONDS."
         )
 
     if CHUNK_SIZE <= 0:

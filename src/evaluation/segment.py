@@ -137,8 +137,17 @@ def evaluate_segments(
     # same row order as the prediction arrays. Enforce a clean 0..n-1 index.
     test_df = test_df.reset_index(drop=True)
 
-    required = ["is_rush_hour", "is_weekend", "pulocationid"]
+    # The pickup-zone column is PULocationID in frames spelled like
+    # preprocess.FEATURES and pulocationid in older ones; resolve it
+    # case-insensitively, as promote._prepare_features does.
+    zone_col = next(
+        (c for c in test_df.columns if str(c).lower() == "pulocationid"), None
+    )
+
+    required = ["is_rush_hour", "is_weekend"]
     missing = [c for c in required if c not in test_df.columns]
+    if zone_col is None:
+        missing.append("pulocationid")
     if missing:
         raise ValueError(f"Missing segment columns: {missing}")
 
@@ -163,16 +172,16 @@ def evaluate_segments(
     # Named high-value zones (always checked, regardless of volume)
     checked_zone_ids = set()
     for zone_id, label in named_zones.items():
-        if (test_df["pulocationid"] == zone_id).any():
-            run(f"zone_{label}_{zone_id}", test_df["pulocationid"] == zone_id)
+        if (test_df[zone_col] == zone_id).any():
+            run(f"zone_{label}_{zone_id}", test_df[zone_col] == zone_id)
             checked_zone_ids.add(zone_id)
 
     # High-volume pickup zones (skip any already covered as named)
-    top_pickup_zones = test_df["pulocationid"].value_counts().head(top_zones).index
+    top_pickup_zones = test_df[zone_col].value_counts().head(top_zones).index
     for zone in top_pickup_zones:
         if zone in checked_zone_ids:
             continue
-        run(f"pickup_zone_{zone}", test_df["pulocationid"] == zone)
+        run(f"pickup_zone_{zone}", test_df[zone_col] == zone)
 
     # Gate
     evaluated = [r for r in results if r["evaluated"]]

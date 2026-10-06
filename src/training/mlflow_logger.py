@@ -12,6 +12,12 @@ import mlflow
 import mlflow.lightgbm
 from mlflow import MlflowClient
 
+from src.training.mlflow_names import (
+    CHAMPION_ALIAS,
+    MLFLOW_EXPERIMENT_NAME,
+    MLFLOW_REGISTERED_MODEL_NAME,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +26,7 @@ class MLflowLogger:
 
     def __init__(
         self,
-        experiment_name: str = "Sentinel-AI",
+        experiment_name: str = MLFLOW_EXPERIMENT_NAME,
         tracking_uri: str | None = None,
     ):
         self.experiment_name = experiment_name
@@ -201,7 +207,7 @@ class MLflowLogger:
     def register_model(
         self,
         run_id: str,
-        model_name: str = "sentinel-ai-champion",
+        model_name: str = MLFLOW_REGISTERED_MODEL_NAME,
     ) -> str:
 
         model_uri = (
@@ -238,7 +244,7 @@ class MLflowLogger:
         self,
         model_name: str,
         model_version: str,
-        alias: str = "Champion",
+        alias: str = CHAMPION_ALIAS,
     ):
 
         logger.info(

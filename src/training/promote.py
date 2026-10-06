@@ -23,6 +23,12 @@ from src.evaluation.bootstrap import bootstrap_gate
 from src.evaluation.segment import evaluate_segments
 from src.evaluation.recent_test import evaluate_recent_test
 from src.ingestion.preprocess import clean_and_engineer
+from src.common.error_redaction import redacted_traceback
+from src.training.mlflow_names import (
+    CHAMPION_ALIAS as _CHAMPION_ALIAS,
+    MLFLOW_EXPERIMENT_NAME,
+    MLFLOW_REGISTERED_MODEL_NAME,
+)
 
 
 # ============================================================
@@ -31,11 +37,11 @@ from src.ingestion.preprocess import clean_and_engineer
 
 load_dotenv()
 
-MODEL_NAME = "sentinel-ai-champion"
+MODEL_NAME = MLFLOW_REGISTERED_MODEL_NAME
 
-CHAMPION_ALIAS = "Champion"
+CHAMPION_ALIAS = _CHAMPION_ALIAS
 
-EXPERIMENT_NAME = "Sentinel-AI"
+EXPERIMENT_NAME = MLFLOW_EXPERIMENT_NAME
 
 RMSE_IMPROVEMENT_THRESHOLD = 0.01
 
@@ -445,8 +451,10 @@ def load_challenger(
 
     except Exception as exc:
 
-        logger.exception(
-            "Failed to load Challenger"
+        # MLflow errors can embed tracking/artifact URIs with credentials
+        logger.error(
+            "Failed to load Challenger\n%s",
+            redacted_traceback(exc),
         )
 
         raise RuntimeError(
@@ -591,8 +599,9 @@ def register_challenger(
 
     except Exception as exc:
 
-        logger.exception(
-            "Failed to register Challenger"
+        logger.error(
+            "Failed to register Challenger\n%s",
+            redacted_traceback(exc),
         )
 
         raise RuntimeError(
@@ -634,9 +643,10 @@ def promote(
 
     except Exception as exc:
 
-        logger.exception(
-            "Failed to promote version %s",
+        logger.error(
+            "Failed to promote version %s\n%s",
             version,
+            redacted_traceback(exc),
         )
 
         raise RuntimeError(
@@ -1097,10 +1107,11 @@ if __name__ == "__main__":
 
         exit_code = 0 if result["promoted"] else 1
 
-    except Exception:
+    except Exception as exc:
 
-        logger.exception(
-            "Model promotion pipeline failed"
+        logger.error(
+            "Model promotion pipeline failed\n%s",
+            redacted_traceback(exc),
         )
 
         exit_code = 1

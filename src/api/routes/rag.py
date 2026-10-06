@@ -28,7 +28,8 @@ def chat(
 ):
     # Protect the RAG endpoint using the same API key
     # as the existing prediction endpoint.
-    if x_api_key != API_KEY:
+    # API_KEY None (unset) must never match a missing header (None)
+    if API_KEY is None or x_api_key != API_KEY:
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",
