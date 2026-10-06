@@ -36,6 +36,11 @@ IGNORED_FEATURES=[
 RELATIVE_SHIFT_THRESHOLD = 0.25
 RANK_SHIFT_THRESHOLD = 2
 
+# Relative shift assigned when reference importance is 0 but current is
+# not (e.g. a feature the reference model never split on). 100% lands in
+# CRITICAL_SHIFT and exceeds RELATIVE_SHIFT_THRESHOLD, so it is drifted.
+ZERO_REFERENCE_SHIFT = 1.0
+
 def load_model(model_path: str = MODEL_PATH):
     with open(model_path, "rb") as f:
         model = pickle.load(f)
@@ -116,7 +121,15 @@ def analyze_shap_drift(
         
         # computing shifts
         absolute_shift = abs(cur_imp - ref_imp)
-        relative_shift = absolute_shift / (ref_imp + 1e-10)
+        if ref_imp != 0:
+            # True ratio, no epsilon, so exact boundaries stay exact
+            relative_shift = absolute_shift / abs(ref_imp)
+        elif cur_imp == 0:
+            # Unused in both windows: nothing shifted
+            relative_shift = 0.0
+        else:
+            # Unused in reference, used now: treat as maximal shift
+            relative_shift = ZERO_REFERENCE_SHIFT
         
         # Rank shift
         ref_rank = ref_rankings.get(feature, 0)

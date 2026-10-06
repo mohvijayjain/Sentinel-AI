@@ -16,6 +16,10 @@ from src.training.orchestrator import (
     run_retraining_pipeline
 )
 
+from src.monitoring.shap_drift import (
+    IGNORED_FEATURES as SHAP_IGNORED_FEATURES
+)
+
 
 # ============================================================
 # Configuration
@@ -105,15 +109,22 @@ def calculate_shap_score():
         SHAP_PATH
     )
 
+    # The detector's is_drifted is authoritative; features the
+    # detector ignores never contribute, matching its own retrain logic
     drifted = df[
-        df["is_drifted"] == True
+        (df["is_drifted"] == True)
+        & (~df["feature"].isin(SHAP_IGNORED_FEATURES))
     ]
 
     if len(drifted) == 0:
         return 0
 
+    # A drifted row can still be STABLE in magnitude (rank-only drift);
+    # floor it at LOW_SHIFT so detected drift never scores 0
     scores = [
-        severity_score(severity)
+        severity_score(
+            "LOW_SHIFT" if severity == "STABLE" else severity
+        )
         for severity in drifted["severity"]
     ]
 
