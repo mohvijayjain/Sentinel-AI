@@ -144,6 +144,26 @@ TOP_K = int(
     )
 )
 
+# Relevance cutoff on Chroma's COSINE DISTANCE (the collection is created
+# with hnsw:space=cosine): distance = 1 - cosine_similarity, range 0..2,
+# SMALLER = MORE relevant. Retrieved documents with distance ABOVE this
+# value are dropped before the LLM sees them; if none remain, /chat
+# returns the "information unavailable" answer without calling the LLM.
+#
+# Default 0.85 (cosine similarity >= 0.15), calibrated on the live index
+# with nvidia/nemotron-3-embed-1b: relevant hits for real monitoring /
+# retraining questions in English, Hindi and French were 0.35-0.72, while
+# the closest document to off-topic questions (capital of France, recipes,
+# weather, ...) was 0.93-1.04. 0.85 sits in that gap, nearer the junk
+# side, so real questions keep a ~0.13 margin. Raise it (max 2.0 = no
+# filtering) if legitimate questions start coming back "unavailable".
+RAG_MAX_DISTANCE = float(
+    os.getenv(
+        "RAG_MAX_DISTANCE",
+        "0.85",
+    )
+)
+
 
 # ============================================================
 # Validation
@@ -218,4 +238,9 @@ def validate_config() -> None:
     if TOP_K <= 0:
         raise ValueError(
             "RAG_TOP_K must be greater than 0."
+        )
+
+    if not 0 < RAG_MAX_DISTANCE <= 2:
+        raise ValueError(
+            "RAG_MAX_DISTANCE must be in (0, 2] (cosine distance)."
         )

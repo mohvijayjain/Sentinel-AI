@@ -34,7 +34,7 @@ def load_model(model_path: str = MODEL_PATH):
     with open(model_path, "rb") as f:
         model = pickle.load(f)
 
-    print(f"✅ Model loaded from {model_path}")
+    print(f"Model loaded from {model_path}")
     return model
 
 
@@ -45,7 +45,7 @@ def load_model(model_path: str = MODEL_PATH):
 def load_reference(reference_path: str = REFERENCE_PATH):
     reference = pd.read_parquet(reference_path)
 
-    print(f"📚 Reference data shape: {reference.shape}")
+    print(f"Reference data shape: {reference.shape}")
 
     return reference
 
@@ -61,7 +61,7 @@ def load_current_data(current_paths=None):
     frames = []
 
     for path in current_paths:
-        print(f"📥 Loading current data: {path}")
+        print(f"Loading current data: {path}")
 
         df = pd.read_parquet(path)
 
@@ -75,7 +75,7 @@ def load_current_data(current_paths=None):
     )
 
     print(
-        f"📊 Combined current data shape: "
+        f"Combined current data shape: "
         f"{current.shape}"
     )
 
@@ -89,13 +89,14 @@ def load_current_data(current_paths=None):
 def save_reports(
     statistical_results,
     shap_results,
-    prediction_results
+    prediction_results,
+    reports_dir=REPORTS_DIR
 ):
-    os.makedirs(REPORTS_DIR, exist_ok=True)
+    os.makedirs(reports_dir, exist_ok=True)
 
     statistical_results.to_csv(
         os.path.join(
-            REPORTS_DIR,
+            reports_dir,
             "statistical_drift.csv"
         ),
         index=False
@@ -103,7 +104,7 @@ def save_reports(
 
     shap_results.to_csv(
         os.path.join(
-            REPORTS_DIR,
+            reports_dir,
             "shap_drift.csv"
         ),
         index=False
@@ -113,41 +114,59 @@ def save_reports(
         [prediction_results]
     ).to_csv(
         os.path.join(
-            REPORTS_DIR,
+            reports_dir,
             "prediction_drift.csv"
         ),
         index=False
     )
 
-    print("\n✅ Drift reports generated:")
-    print("   → reports/statistical_drift.csv")
-    print("   → reports/shap_drift.csv")
-    print("   → reports/prediction_drift.csv")
+    print("\nDrift reports generated:")
+    print(f"   - {reports_dir}/statistical_drift.csv")
+    print(f"   - {reports_dir}/shap_drift.csv")
+    print(f"   - {reports_dir}/prediction_drift.csv")
 
 
 # ============================================================
 # Run Complete Drift Detection
 # ============================================================
 
-def run_drift_detection():
+def run_drift_detection(
+    reference=None,
+    current=None,
+    model=None,
+    reports_dir=REPORTS_DIR
+):
+    """
+    Run the three detectors (current vs reference) and write their
+    reports into reports_dir.
+
+    With no arguments this is the original batch run (reference file,
+    CURRENT_PATHS, model file, reports/). Callers may pass already
+    loaded data / model and a private reports_dir, e.g. one directory
+    per uploaded dataset so concurrent runs never share report files.
+    """
+
     print("=" * 70)
-    print(" Sentinel-AI — Drift Detection Runner")
+    print(" Sentinel-AI - Drift Detection Runner")
     print("=" * 70)
 
     # --------------------------------------------------------
     # Load data and model
     # --------------------------------------------------------
 
-    reference = load_reference()
-    current = load_current_data()
-    model = load_model()
+    if reference is None:
+        reference = load_reference()
+    if current is None:
+        current = load_current_data()
+    if model is None:
+        model = load_model()
 
     # --------------------------------------------------------
     # Statistical Drift
     # --------------------------------------------------------
 
     print("\n" + "=" * 70)
-    print("📊 Running Statistical Drift")
+    print("Running Statistical Drift")
     print("=" * 70)
 
     statistical_results, _, statistical_drifted = (
@@ -167,7 +186,7 @@ def run_drift_detection():
     # --------------------------------------------------------
 
     print("\n" + "=" * 70)
-    print("🧠 Running SHAP Drift")
+    print("Running SHAP Drift")
     print("=" * 70)
 
     shap_results, _, shap_drifted = (
@@ -188,7 +207,7 @@ def run_drift_detection():
     # --------------------------------------------------------
 
     print("\n" + "=" * 70)
-    print("🔮 Running Prediction Drift")
+    print("Running Prediction Drift")
     print("=" * 70)
 
     print("\nGenerating reference predictions...")
@@ -222,11 +241,12 @@ def run_drift_detection():
     save_reports(
         statistical_results,
         shap_results,
-        prediction_results
+        prediction_results,
+        reports_dir=reports_dir
     )
 
     print("\n" + "=" * 70)
-    print("✅ Drift Detection Runner Complete")
+    print("Drift Detection Runner Complete")
     print("=" * 70)
 
     return {

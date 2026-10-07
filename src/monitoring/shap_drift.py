@@ -195,13 +195,13 @@ def print_shap_comparison(
         cur_rank = cur_rankings.get(feature, 0)
         rank_diff = cur_rank - ref_rank
         
-        arrow = "↑" if cur_imp > ref_imp else "↓"
+        arrow = "^" if cur_imp > ref_imp else "v"
         rank_arrow = (
-            f"↑{abs(rank_diff)}" if rank_diff < 0
-            else f"↓{abs(rank_diff)}" if rank_diff > 0
-            else "→"
+            f"^{abs(rank_diff)}" if rank_diff < 0
+            else f"v{abs(rank_diff)}" if rank_diff > 0
+            else "="
         )
-        flag = "🔴" if shift_pct > 25 else "🟡" if shift_pct>10 else "✅"
+        flag = "HIGH" if shift_pct > 25 else "WARN" if shift_pct>10 else "OK"
         
         print(
             f"  {feature:<25} {ref_imp:>10.4f} {cur_imp:>10.4f} "

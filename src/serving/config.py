@@ -30,3 +30,31 @@ def require_api_key() -> str:
 
     return API_KEY
 MODEL_VERSION = os.getenv("MODEL_VERSION", "v1")
+
+# CORS
+#
+# Explicit allowlist, comma-separated. Unset/blank -> local dev frontend
+# only; never "*": a wildcard with allow_credentials=True is invalid per
+# the CORS spec, and an open API would be callable from any web page.
+DEFAULT_CORS_ALLOWED_ORIGINS = ["http://localhost:3000"]
+
+
+def parse_cors_origins(raw):
+    """Split a comma-separated origin list: strip, drop empties, refuse '*'."""
+
+    origins = [
+        origin.strip().rstrip("/")
+        for origin in (raw or "").split(",")
+        if origin.strip()
+    ]
+
+    if "*" in origins:
+        raise RuntimeError(
+            "CORS_ALLOWED_ORIGINS must list explicit origins; '*' is not "
+            "allowed."
+        )
+
+    return origins or list(DEFAULT_CORS_ALLOWED_ORIGINS)
+
+
+CORS_ALLOWED_ORIGINS = parse_cors_origins(os.getenv("CORS_ALLOWED_ORIGINS"))

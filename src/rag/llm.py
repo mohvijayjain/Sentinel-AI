@@ -42,6 +42,13 @@ _client = OpenAI(
 # (auth, invalid key, malformed request, unknown model) is permanent.
 RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
 
+# The model reasons (hidden reasoning_content) before answering unless told
+# not to. For grounded answers over a few short records that deliberation
+# added 1,200-1,800 tokens and 39-46s per answer ("why" questions most),
+# past the 25s per-attempt timeout, so /chat failed with APITimeoutError.
+# With it off the same answers take ~1-2s. Same model, same prompt.
+NO_REASONING = {"chat_template_kwargs": {"enable_thinking": False}}
+
 
 def is_retryable(error: Exception) -> bool:
     """Timeouts, connection failures, 429 and selected 5xx only."""
@@ -139,6 +146,7 @@ def _complete(client, question: str, context: str) -> str:
             },
         ],
         temperature=0.2,
+        extra_body=NO_REASONING,
     )
 
     return response.choices[0].message.content.strip()

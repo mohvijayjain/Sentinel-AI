@@ -319,3 +319,149 @@ def insert_retraining_event(
     )
 
     return event_id
+
+
+def insert_prediction_log(
+    *,
+    predicted_at,
+    trip_distance,
+    pickup_hour,
+    pickup_day_of_week,
+    pickup_month,
+    is_weekend,
+    is_rush_hour,
+    pulocationid,
+    dolocationid,
+    payment_type,
+    vendorid,
+    ratecodeid,
+    prediction_seconds,
+    prediction_minutes,
+    model_version,
+    latency_ms
+):
+    """
+    Persist one served prediction into prediction_logs.
+
+    predicted_at is an ISO-8601 UTC timestamp, stored as UTC wall-clock
+    time in the TIMESTAMP column like retraining_events.triggered_at
+    (independent of the session time zone; the column's NOW() default
+    is not relied on). Column names are the ones PostgreSQL actually
+    created: Sentinel.sql's unquoted PULocationID, DOLocationID, VendorID
+    and RatecodeID fold to lowercase. Model inputs and outputs only: no
+    request headers or credentials ever reach this table.
+    """
+
+    query = text("""
+        INSERT INTO prediction_logs
+        (
+            predicted_at,
+            trip_distance,
+            pickup_hour,
+            pickup_day_of_week,
+            pickup_month,
+            is_weekend,
+            is_rush_hour,
+            pulocationid,
+            dolocationid,
+            payment_type,
+            vendorid,
+            ratecodeid,
+            prediction_seconds,
+            prediction_minutes,
+            model_version,
+            latency_ms
+        )
+
+        VALUES
+        (
+            CAST(:predicted_at AS TIMESTAMPTZ) AT TIME ZONE 'UTC',
+            :trip_distance,
+            :pickup_hour,
+            :pickup_day_of_week,
+            :pickup_month,
+            :is_weekend,
+            :is_rush_hour,
+            :pulocationid,
+            :dolocationid,
+            :payment_type,
+            :vendorid,
+            :ratecodeid,
+            :prediction_seconds,
+            :prediction_minutes,
+            :model_version,
+            :latency_ms
+        )
+
+        RETURNING id
+    """)
+
+    with engine.begin() as conn:
+
+        result = conn.execute(
+            query,
+            {
+                "predicted_at": predicted_at,
+                "trip_distance": trip_distance,
+                "pickup_hour": pickup_hour,
+                "pickup_day_of_week": pickup_day_of_week,
+                "pickup_month": pickup_month,
+                "is_weekend": is_weekend,
+                "is_rush_hour": is_rush_hour,
+                "pulocationid": pulocationid,
+                "dolocationid": dolocationid,
+                "payment_type": payment_type,
+                "vendorid": vendorid,
+                "ratecodeid": ratecodeid,
+                "prediction_seconds": prediction_seconds,
+                "prediction_minutes": prediction_minutes,
+                "model_version": model_version,
+                "latency_ms": latency_ms
+            }
+        )
+
+        log_id = result.scalar_one()
+
+    return log_id
+
+
+def get_retraining_events(limit=20):
+    """Most recent retraining attempts first (read-only)."""
+
+    query = text("""
+        SELECT *
+        FROM retraining_events
+        ORDER BY id DESC
+        LIMIT :limit
+    """)
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            query,
+            {
+                "limit": limit
+            }
+        )
+
+        return result.fetchall()
+
+
+def get_prediction_logs(limit=50):
+    """Most recent served predictions first (read-only)."""
+
+    query = text("""
+        SELECT *
+        FROM prediction_logs
+        ORDER BY id DESC
+        LIMIT :limit
+    """)
+
+    with engine.connect() as conn:
+        result = conn.execute(
+            query,
+            {
+                "limit": limit
+            }
+        )
+
+        return result.fetchall()

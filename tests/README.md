@@ -5,10 +5,10 @@ Tests for Sentinel-AI's drift severity and scoring logic.
 ## Running
 
 ```bash
-pytest tests/
+pytest
 ```
 
-You don't need any environment variables or running services: no Postgres, ChromaDB, NVIDIA API key, network access or mlflow. Run `pytest tests/`, not a bare `pytest`, so the repository-level `test_repository.py` (which needs a live database) isn't collected.
+You don't need any environment variables or running services: no Postgres, ChromaDB, NVIDIA API key, network access or mlflow. `pytest.ini` sets `testpaths = tests`, so a bare `pytest` collects only this directory. Test files belong here; `test_collection_hygiene.py` fails if a `test_*.py` / `*_test.py` file appears elsewhere in the repo.
 
 ## What's covered
 

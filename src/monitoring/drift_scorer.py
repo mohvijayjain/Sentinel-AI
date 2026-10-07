@@ -152,10 +152,12 @@ def check_psi_not_nan(df, path):
 # Statistical Drift Score
 # ============================================================
 
-def calculate_statistical_score():
+def calculate_statistical_score(path=None):
+
+    path = path or STATISTICAL_PATH
 
     df = read_drift_report(
-        STATISTICAL_PATH
+        path
     )
 
     if df is None:
@@ -163,7 +165,7 @@ def calculate_statistical_score():
 
     check_psi_not_nan(
         df,
-        STATISTICAL_PATH
+        path
     )
 
     scores = []
@@ -184,10 +186,10 @@ def calculate_statistical_score():
 # SHAP Drift Score
 # ============================================================
 
-def calculate_shap_score():
+def calculate_shap_score(path=None):
 
     df = read_drift_report(
-        SHAP_PATH
+        path or SHAP_PATH
     )
 
     if df is None:
@@ -219,10 +221,12 @@ def calculate_shap_score():
 # Prediction Drift Score
 # ============================================================
 
-def calculate_prediction_score():
+def calculate_prediction_score(path=None):
+
+    path = path or PREDICTION_PATH
 
     df = read_drift_report(
-        PREDICTION_PATH
+        path
     )
 
     if df is None:
@@ -231,7 +235,7 @@ def calculate_prediction_score():
     # Only row 0 is scored, so only its PSI is checked
     check_psi_not_nan(
         df.iloc[[0]],
-        PREDICTION_PATH
+        path
     )
 
     severity = df.iloc[0]["severity"]
@@ -239,6 +243,40 @@ def calculate_prediction_score():
     return severity_score(
         severity
     )
+
+
+# ============================================================
+# Weighted Score + Action (shared by __main__ and uploaded runs)
+# ============================================================
+
+def score_reports(
+    statistical_path=None,
+    shap_path=None,
+    prediction_path=None
+):
+    """
+    The three detector scores, their weighted overall score (unrounded)
+    and the action, from the reports at the given paths (default: the
+    reports/ paths above).
+    """
+
+    statistical_score = calculate_statistical_score(statistical_path)
+    shap_score = calculate_shap_score(shap_path)
+    prediction_score = calculate_prediction_score(prediction_path)
+
+    overall_score = (
+        statistical_score * WEIGHTS["statistical"]
+        + shap_score * WEIGHTS["shap"]
+        + prediction_score * WEIGHTS["prediction"]
+    )
+
+    return {
+        "statistical_score": statistical_score,
+        "shap_score": shap_score,
+        "prediction_score": prediction_score,
+        "overall_score": overall_score,
+        "action": get_action(overall_score),
+    }
 
 
 # ============================================================
@@ -283,62 +321,49 @@ def get_action(score):
 
 
 # ============================================================
+# Console Output
+# ============================================================
+
+def report(message=""):
+    """
+    Print one line of scorer output as pure ASCII.
+
+    __main__ prints between the monitoring-run write, the Chroma index and
+    the retraining trigger. On a stdout that cannot encode a character
+    (cp1252 console, C-locale container, cron/CI pipe) print() raises
+    UnicodeEncodeError, which would stop the run before retraining. The
+    literals passed here are ASCII; anything non-ASCII in dynamic text
+    (e.g. an error message) is backslash-escaped, as Python already does
+    for stderr, so the line can always be written.
+    """
+
+    print(
+        message.encode("ascii", "backslashreplace").decode("ascii")
+    )
+
+
+# ============================================================
 # Main
 # ============================================================
 
 if __name__ == "__main__":
 
-    print("=" * 60)
-    print(" Sentinel AI — Drift Severity Scorer")
-    print("=" * 60)
+    report("=" * 60)
+    report(" Sentinel AI - Drift Severity Scorer")
+    report("=" * 60)
 
 
     # --------------------------------------------------------
-    # Calculate individual drift scores
+    # Detector scores, weighted overall score and action
     # --------------------------------------------------------
 
-    statistical_score = (
-        calculate_statistical_score()
-    )
+    scores = score_reports()
 
-    shap_score = (
-        calculate_shap_score()
-    )
-
-    prediction_score = (
-        calculate_prediction_score()
-    )
-
-
-    # --------------------------------------------------------
-    # Calculate weighted overall score
-    # --------------------------------------------------------
-
-    overall_score = (
-
-        statistical_score
-        * WEIGHTS["statistical"]
-
-        +
-
-        shap_score
-        * WEIGHTS["shap"]
-
-        +
-
-        prediction_score
-        * WEIGHTS["prediction"]
-
-    )
-
-
-    # --------------------------------------------------------
-    # Determine action
-    # --------------------------------------------------------
-
-    action = get_action(
-        overall_score
-    )
+    statistical_score = scores["statistical_score"]
+    shap_score = scores["shap_score"]
+    prediction_score = scores["prediction_score"]
+    overall_score = scores["overall_score"]
+    action = scores["action"]
 
 
     # --------------------------------------------------------
@@ -371,11 +396,11 @@ if __name__ == "__main__":
     # Print drift summary
     # --------------------------------------------------------
 
-    print("\nDrift Summary")
+    report("\nDrift Summary")
 
     for key, value in result.items():
 
-        print(
+        report(
             f"{key}: {value}"
         )
 
@@ -450,8 +475,8 @@ if __name__ == "__main__":
     )
 
 
-    print(
-        f"\n✅ Monitoring run saved → run_id={run_id}"
+    report(
+        f"\nMonitoring run saved: run_id={run_id}"
     )
 
 
@@ -475,8 +500,8 @@ if __name__ == "__main__":
     )
 
 
-    print(
-        "✅ Monitoring result indexed into ChromaDB"
+    report(
+        "Monitoring result indexed into ChromaDB"
     )
 
 
@@ -486,15 +511,15 @@ if __name__ == "__main__":
 
     if action == "RETRAIN":
 
-        print("\n" + "=" * 60)
-        print(" 🚨 AUTOMATIC RETRAINING TRIGGERED")
-        print("=" * 60)
+        report("\n" + "=" * 60)
+        report(" AUTOMATIC RETRAINING TRIGGERED")
+        report("=" * 60)
 
-        print(
+        report(
             "\nReason: Drift severity reached RETRAIN threshold."
         )
 
-        print(
+        report(
             "Starting retraining pipeline..."
         )
 
@@ -518,11 +543,11 @@ if __name__ == "__main__":
         except Exception as exc:
 
             # Type + redacted message only; raw str(exc) may hold secrets
-            print(
-                f"\n❌ Retraining pipeline failed: {describe_error(exc)}"
+            report(
+                f"\nRetraining pipeline failed: {describe_error(exc)}"
             )
 
-            print(
+            report(
                 "Champion remains unchanged. "
                 "Monitoring record is already saved."
             )
@@ -534,18 +559,18 @@ if __name__ == "__main__":
 
         if retraining_result is not None:
 
-            print("\nAutomatic Retraining Result")
-            print("-" * 60)
+            report("\nAutomatic Retraining Result")
+            report("-" * 60)
 
 
             for key, value in retraining_result.items():
 
-                print(
+                report(
                     f"{key}: {value}"
                 )
 
 
-            print("-" * 60)
+            report("-" * 60)
 
 
             # ------------------------------------------------
@@ -554,22 +579,22 @@ if __name__ == "__main__":
 
             if retraining_result["promoted"]:
 
-                print(
-                    "\n✅ Challenger model PROMOTED."
+                report(
+                    "\nChallenger model PROMOTED."
                 )
 
-                print(
+                report(
                     f"New Champion Version: "
                     f"{retraining_result['new_version']}"
                 )
 
             else:
 
-                print(
-                    "\n❌ Challenger model REJECTED."
+                report(
+                    "\nChallenger model REJECTED."
                 )
 
-                print(
+                report(
                     f"Champion remains Version: "
                     f"{retraining_result['champion_version']}"
                 )
@@ -577,11 +602,11 @@ if __name__ == "__main__":
 
     else:
 
-        print(
-            f"\nℹ️ No retraining required."
+        report(
+            "\nNo retraining required."
         )
 
-        print(
+        report(
             f"Action: {action}"
         )
 
@@ -590,10 +615,10 @@ if __name__ == "__main__":
     # Completion
     # --------------------------------------------------------
 
-    print(
-        "\nSaved → reports/drift_summary.json"
+    report(
+        "\nSaved: reports/drift_summary.json"
     )
 
-    print("=" * 60)
-    print(" Sentinel AI Drift Pipeline Complete")
-    print("=" * 60)
+    report("=" * 60)
+    report(" Sentinel AI Drift Pipeline Complete")
+    report("=" * 60)

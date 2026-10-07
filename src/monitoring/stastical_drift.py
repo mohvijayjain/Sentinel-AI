@@ -219,16 +219,16 @@ def run_statistical_drift(reference, current):
 
     for feature in FEATURES:
         if feature in IGNORED_FEATURES:
-            print(f"  ⏭️  Skipping: {feature}")
+            print(f"  Skipping: {feature}")
             continue
         if feature not in reference.columns:
-            print(f"  ⚠️  Not in reference: {feature}")
+            print(f"  Not in reference: {feature}")
             continue
         if feature not in current.columns:
-            print(f"  ⚠️  Not in current: {feature}")
+            print(f"  Not in current: {feature}")
             continue
 
-        print(f"  🔍 Analyzing: {feature}")
+        print(f"  Analyzing: {feature}")
         result = analyze_feature(reference, current, feature)
         results.append(result)
 

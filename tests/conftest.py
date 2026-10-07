@@ -39,6 +39,7 @@ STUBBED_MODULES = {
     "src.database.drift_repository": [
         "insert_monitoring_run",
         "insert_drift_scores",
+        "insert_prediction_log",
     ],
     "src.rag.monitoring_updater": [
         "upsert_monitoring_run",
@@ -133,3 +134,90 @@ def write_report(tmp_path):
         return str(path)
 
     return _write
+
+
+# ============================================================
+# The real FastAPI app (serving lifecycle / auth / CORS tests)
+# ============================================================
+
+@pytest.fixture(scope="session")
+def serving_app():
+    """
+    Import src.serving.app exactly once, against stubs.
+
+    Once only: the Prometheus Instrumentator registers its metrics in the
+    process-global registry at import time. While importing, the monitoring
+    router's DB getters come from the drift_repository stub above, and
+    src.rag.rag (whose retriever builds the NVIDIA client) is a fake, so no
+    database, ChromaDB or NVIDIA key is needed. Tests patch the names the
+    routers bound (e.g. monitoring.get_latest_monitoring_run, rag.ask).
+    """
+
+    getters = [
+        "get_latest_monitoring_run", "get_monitoring_history",
+        "get_drifted_features", "get_feature_drift_scores",
+        "get_retraining_events", "get_prediction_logs",
+    ]
+
+    fake_rag = types.ModuleType("src.rag.rag")
+    fake_rag.ask = MagicMock(name="ask")
+
+    with pytest.MonkeyPatch.context() as mp:
+        repo = sys.modules["src.database.drift_repository"]
+        for name in getters:
+            mp.setattr(repo, name, MagicMock(name=name), raising=False)
+        mp.setitem(sys.modules, "src.rag.rag", fake_rag)
+
+        from src.serving import app as app_module
+
+    return app_module
+
+
+class FixedModel:
+    """Picklable stand-in for the LightGBM model: always 600 seconds."""
+
+    def __init__(self):
+        self.seen_columns = None
+
+    def predict(self, frame):
+        self.seen_columns = list(frame.columns)
+        return [600.0]
+
+
+SERVING_FAKE_KEY = "sntl_live_FAKE_2x_a1b2c3d4e5f60718"
+
+SERVING_FEATURES = ["trip_distance", "pickup_hour", "is_weekend"]
+
+SERVING_METRICS = {"rmse": 300.0, "rmse_min": 5.0, "mae": 200.0, "r2": 0.85}
+
+
+@pytest.fixture
+def serving_artifacts(serving_app, tmp_path, monkeypatch):
+    """
+    Point the canonical loader at temp model/features/metrics files and set
+    a fake API key everywhere it is read (config for startup, routes and
+    the /chat route for requests). Never touches the real model/ dir.
+    """
+
+    import json
+    import pickle
+
+    from src.serving import config, model_loader, routes
+
+    paths = {
+        "MODEL_PATH": tmp_path / "model.pkl",
+        "FEATURES_PATH": tmp_path / "features.json",
+        "METRICS_PATH": tmp_path / "metrics.json",
+    }
+
+    paths["MODEL_PATH"].write_bytes(pickle.dumps(FixedModel()))
+    paths["FEATURES_PATH"].write_text(json.dumps(SERVING_FEATURES))
+    paths["METRICS_PATH"].write_text(json.dumps(SERVING_METRICS))
+
+    for name, path in paths.items():
+        monkeypatch.setattr(model_loader, name, str(path))
+
+    for module in (config, routes, sys.modules["src.api.routes.rag"]):
+        monkeypatch.setattr(module, "API_KEY", SERVING_FAKE_KEY)
+
+    return paths
