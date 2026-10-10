@@ -14,7 +14,9 @@ RUN apt-get update && \
 # Install MLflow and PostgreSQL driver
 RUN pip install --no-cache-dir \
     mlflow==3.15.2 \
-    psycopg2-binary
+    SQLAlchemy==2.0.52 \
+    alembic==1.19.1 \
+    psycopg2-binary==2.9.12
 
 EXPOSE 5000
 
