@@ -5,7 +5,8 @@ SENTINEL_API_URL  base URL of the running Sentinel-AI FastAPI service.
 SENTINEL_API_KEY  the API's X-API-Key. Required for every data endpoint;
                   it stays in this Streamlit process and is never rendered.
 
-A frontend/.env file is loaded if present (see frontend/.env.example).
+Locally: environment or frontend/.env (see frontend/.env.example).
+Streamlit Cloud: the app's Secrets (Settings -> Secrets), same names.
 """
 
 import os
@@ -15,9 +16,25 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent / ".env")
 
-API_URL = (os.getenv("SENTINEL_API_URL") or "http://localhost:8000").strip().rstrip("/")
 
-API_KEY = (os.getenv("SENTINEL_API_KEY") or "").strip() or None
+def _setting(name):
+    """Environment / frontend/.env first; then Streamlit secrets
+    (Streamlit Cloud: Manage app -> Settings -> Secrets)."""
+
+    value = os.getenv(name)
+    if value:
+        return value
+
+    try:
+        import streamlit as st
+        return st.secrets.get(name)
+    except Exception:          # no secrets configured (local runs)
+        return None
+
+
+API_URL = (_setting("SENTINEL_API_URL") or "http://localhost:8000").strip().rstrip("/")
+
+API_KEY = (_setting("SENTINEL_API_KEY") or "").strip() or None
 
 # Most endpoints are quick database reads. /chat is bounded at ~52s on the
 # server (NVIDIA timeout + one retry), so the client waits a little longer.
