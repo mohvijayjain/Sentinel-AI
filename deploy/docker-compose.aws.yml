@@ -1,0 +1,42 @@
+# AWS (single EC2) overrides for the base docker-compose.yml. Always use both:
+#
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.aws.yml up -d --build
+#
+# Differences from local:
+#   * only Caddy is reachable from outside (80/443, automatic HTTPS);
+#   * the API, Postgres and MLflow publish no host ports at all.
+# Requires Docker Compose >= 2.24 (the !reset tag).
+
+services:
+
+  sentinel-api:
+    ports: !reset []
+
+  postgres:
+    ports: !reset []
+
+  mlflow:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2
+    container_name: sentinel-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?Set SITE_ADDRESS in .env, e.g. 13-201-5-20.sslip.io}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data          # HTTPS certificates: keep across restarts
+      - caddy_config:/config
+    depends_on:
+      - sentinel-api
+    networks:
+      - sentinel-network
+
+
+volumes:
+  caddy_data:
+  caddy_config:

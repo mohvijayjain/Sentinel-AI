@@ -1,0 +1,19 @@
+# Public HTTPS entry point for the Sentinel-AI API.
+# SITE_ADDRESS comes from .env (e.g. 13-201-5-20.sslip.io or api.example.com);
+# Caddy obtains and renews the certificate automatically.
+
+{$SITE_ADDRESS} {
+	encode gzip
+
+	# Monitoring uploads (POST /monitoring/run); the API itself caps at 300 MB
+	request_body {
+		max_size 320MB
+	}
+
+	reverse_proxy sentinel-api:8000 {
+		transport http {
+			# An uploaded monitoring run is synchronous and takes minutes
+			read_timeout 15m
+		}
+	}
+}

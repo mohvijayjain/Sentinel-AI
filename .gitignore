@@ -5,3 +5,5 @@ data/processed/
 __pycache__/
 *.pyc
 *.parquet
+# AWS migration bundle (full DB dump): never commit
+sentinel-transfer/
