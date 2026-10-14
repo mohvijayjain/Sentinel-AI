@@ -503,3 +503,48 @@ def test_ingest_file_still_appends_processed_rows(tmp_path, monkeypatch):
 
     assert written["name"] == "taxi_trips"
     assert 0 < written["rows"] <= 300
+
+
+# ============================================================
+# Stop
+# ============================================================
+
+def test_stop_during_detection_saves_nothing(pipeline, monkeypatch):
+
+    from src.monitoring import drift_runner, upload_monitoring
+
+    real_shap = drift_runner.run_shap_drift
+
+    def shap_then_stop(*args, **kwargs):
+        # The Stop button is pressed while SHAP drift is running
+        assert upload_monitoring.request_stop() is True
+        return real_shap(*args, **kwargs)
+
+    monkeypatch.setattr(drift_runner, "run_shap_drift", shap_then_stop)
+
+    response = upload(pipeline, to_csv_bytes(raw_trips(500, seed=11)))
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "stopped"
+    assert pipeline.calls["runs"] == []
+    assert pipeline.calls["scores"] == []
+    assert pipeline.calls["indexed"] == []
+    assert pipeline.calls["retrain"] == []
+    assert not os.path.exists(pipeline.calls["dirs"][0])
+
+    # The lock is free and the stop flag cleared: the next run completes
+    monkeypatch.setattr(drift_runner, "run_shap_drift", real_shap)
+    response = upload(pipeline, to_csv_bytes(raw_trips(500, seed=12)))
+    assert response.status_code == 200
+    assert response.json()["status"] == "completed"
+    assert len(pipeline.calls["runs"]) == 1
+
+
+def test_stop_with_no_run_in_progress(pipeline):
+    response = pipeline.post("/monitoring/run/stop", headers=AUTH)
+    assert response.status_code == 409
+
+
+def test_stop_requires_api_key(pipeline):
+    response = pipeline.post("/monitoring/run/stop")
+    assert response.status_code == 401

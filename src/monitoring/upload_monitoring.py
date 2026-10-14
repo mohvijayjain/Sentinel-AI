@@ -22,6 +22,11 @@ three reports, deleted afterwards, so runs never touch the committed
 reports/ files or each other's. Runs are also serialized (one at a time):
 detection loads the full reference (~7M rows), so parallel runs would
 multiply memory, not throughput.
+
+Stop: request_stop() asks the running upload to stop. The run checks the
+flag between stages (and between detectors) and raises RunCancelled, so
+it stops at the next stage boundary. The last check is before anything
+is written, so a stopped run saves nothing (no DB rows, no RAG entry).
 """
 
 import logging
@@ -42,6 +47,7 @@ MAX_UPLOAD_BYTES = int(os.getenv("MONITORING_MAX_UPLOAD_MB", "300")) * 1024 * 10
 
 _run_lock = threading.Lock()
 _retrain_lock = threading.Lock()
+_stop_requested = threading.Event()
 
 
 class UploadError(Exception):
@@ -55,6 +61,28 @@ class UploadError(Exception):
 
 class RunInProgress(Exception):
     """Another monitoring run is still executing."""
+
+
+class RunCancelled(Exception):
+    """The run was stopped on request before anything was saved."""
+
+
+def run_in_progress() -> bool:
+    return _run_lock.locked()
+
+
+def request_stop() -> bool:
+    """Ask the running upload to stop. False if nothing is running."""
+
+    if not _run_lock.locked():
+        return False
+    _stop_requested.set()
+    return True
+
+
+def _checkpoint():
+    if _stop_requested.is_set():
+        raise RunCancelled()
 
 
 def new_run_dir() -> str:
@@ -108,10 +136,13 @@ def run_uploaded_dataset(
     if not _run_lock.acquire(blocking=False):
         raise RunInProgress()
 
+    _stop_requested.clear()
+
     try:
         return _run(file_path, reports_dir, model=model,
                     file_name=file_name, label=label)
     finally:
+        _stop_requested.clear()
         _run_lock.release()
 
 
@@ -134,6 +165,7 @@ def _run(file_path, reports_dir, *, model, file_name, label):
         )
 
     # Only the columns preprocessing uses: same result, less memory
+    _checkpoint()
     current = read_raw_file(file_path, columns=RAW_REQUIRED_COLUMNS)
     rows_uploaded = len(current)
 
@@ -141,6 +173,7 @@ def _run(file_path, reports_dir, *, model, file_name, label):
         raise UploadError(422, "The dataset is empty.")
 
     # ---- Preprocess (shared pipeline) ------------------------------
+    _checkpoint()
     current = preprocess_raw(current, month_name=label or file_name)
     rows_processed = len(current)
 
@@ -152,6 +185,7 @@ def _run(file_path, reports_dir, *, model, file_name, label):
         )
 
     # ---- Detect: current vs the existing reference -----------------
+    _checkpoint()
     reference = drift_runner.load_reference(REFERENCE_PATH)
     reference_rows = len(reference)
 
@@ -160,6 +194,7 @@ def _run(file_path, reports_dir, *, model, file_name, label):
         current=current,
         model=model,
         reports_dir=reports_dir,
+        checkpoint=_checkpoint,
     )
     del reference, current
 
@@ -173,6 +208,9 @@ def _run(file_path, reports_dir, *, model, file_name, label):
     )
 
     # ---- Persist, exactly like drift_scorer's run ------------------
+    # Last chance to stop: past this point the run is saved in full
+    _checkpoint()
+
     statistical_df = drift_scorer.read_drift_report(statistical_path)
     if statistical_df is None:
         import pandas as pd

@@ -144,3 +144,8 @@ def run_monitoring(file_name: str, content: bytes, period: str = "") -> ApiResul
         data={"period": period} if period else None,
         timeout=config.RUN_TIMEOUT_SECONDS,
     )
+
+
+def stop_monitoring() -> ApiResult:
+    """POST /monitoring/run/stop: ask the run in progress to stop."""
+    return _request("POST", "/monitoring/run/stop")

@@ -134,7 +134,8 @@ def run_drift_detection(
     reference=None,
     current=None,
     model=None,
-    reports_dir=REPORTS_DIR
+    reports_dir=REPORTS_DIR,
+    checkpoint=None
 ):
     """
     Run the three detectors (current vs reference) and write their
@@ -144,7 +145,12 @@ def run_drift_detection(
     CURRENT_PATHS, model file, reports/). Callers may pass already
     loaded data / model and a private reports_dir, e.g. one directory
     per uploaded dataset so concurrent runs never share report files.
+
+    checkpoint (optional) is called between detectors; it may raise to
+    abandon the run early (used by the Stop button for uploaded runs).
     """
+
+    checkpoint = checkpoint or (lambda: None)
 
     print("=" * 70)
     print(" Sentinel-AI - Drift Detection Runner")
@@ -181,6 +187,8 @@ def run_drift_detection(
         f"{statistical_drifted or 'None'}"
     )
 
+    checkpoint()
+
     # --------------------------------------------------------
     # SHAP Drift
     # --------------------------------------------------------
@@ -202,6 +210,8 @@ def run_drift_detection(
         f"{shap_drifted or 'None'}"
     )
 
+    checkpoint()
+
     # --------------------------------------------------------
     # Prediction Drift
     # --------------------------------------------------------
@@ -216,6 +226,8 @@ def run_drift_detection(
         model,
         reference
     )
+
+    checkpoint()
 
     print("Generating current predictions...")
 
@@ -233,6 +245,8 @@ def run_drift_detection(
 
     for key, value in prediction_results.items():
         print(f"   {key}: {value}")
+
+    checkpoint()
 
     # --------------------------------------------------------
     # Save all reports

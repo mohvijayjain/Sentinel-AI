@@ -175,6 +175,12 @@ def run_monitoring(
     except upload_monitoring.UploadError as error:
         raise HTTPException(status_code=error.status_code, detail=error.message)
 
+    except upload_monitoring.RunCancelled:
+        return {
+            "status": "stopped",
+            "message": "Monitoring run was stopped. Nothing was saved.",
+        }
+
     except upload_monitoring.RunInProgress:
         raise HTTPException(
             status_code=409,
@@ -203,4 +209,20 @@ def run_monitoring(
         background_tasks.add_task(upload_monitoring.start_retraining)
         result["retraining"] = "started"
 
+    result["status"] = "completed"
     return result
+
+
+@router.post("/run/stop")
+def stop_monitoring_run():
+    """
+    Stop the monitoring run in progress. It stops at its next stage
+    boundary, before anything is saved; POST /run then answers
+    {"status": "stopped"}.
+    """
+
+    if not upload_monitoring.request_stop():
+        raise HTTPException(
+            status_code=409, detail="No monitoring run is in progress."
+        )
+    return {"status": "stopping"}
