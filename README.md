@@ -2,7 +2,9 @@
 
 **A self-healing ML pipeline.** Sentinel-AI serves a LightGBM model that predicts NYC taxi trip duration. It watches production data for drift, decides on its own when the model needs retraining, retrains it, and promotes the new model only if it passes strict validation gates. An AI assistant (RAG) explains every decision in plain English.
 
-> **Live demo:** the UI is always online, but the backend runs on AWS EC2 and is kept stopped to save cost. If the UI shows *Backend: Offline*, email **your.email@example.com** and I'll start it for you.
+**🚀 Live demo:** [mohvijayjain-sentinel-ai-frontendapp-1pecn3.streamlit.app](https://mohvijayjain-sentinel-ai-frontendapp-1pecn3.streamlit.app/)
+
+> **Note:** the UI is always online, but the backend runs on AWS EC2 and is kept stopped to save cost. If the UI shows *Backend: Offline*, email **your.email@example.com** and I'll start it for you.
 
 ---
 
