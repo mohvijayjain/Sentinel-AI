@@ -20,6 +20,98 @@
 
 ---
 
+## Full project explanation
+
+### 1. The problem
+
+ML models degrade silently. The world changes (new routes, new pricing, holidays, an airport closure), the input data starts to look different from the training data, and predictions get worse, often without anyone noticing. In most teams, someone has to spot this, retrain by hand, and decide whether the new model is really better.
+
+Sentinel-AI automates that loop: **detect drift → decide → retrain → validate → promote or reject → explain**, with a human able to see and question every step.
+
+### 2. The model
+
+- **Task:** regression. Predict NYC yellow-taxi **trip duration (seconds)** from the trip details known at pickup.
+- **Data:** public NYC TLC trip records. Raw files go through one shared preprocessing step (`src/ingestion`) that cleans invalid rows, removes outliers and engineers time features. Training and monitoring use the **same** code, so features always match.
+- **Features (11):** `trip_distance`, `pickup_hour`, `pickup_day_of_week`, `pickup_month`, `is_weekend`, `is_rush_hour`, `PULocationID`, `DOLocationID`, `payment_type`, `VendorID`, `RatecodeID`.
+- **Algorithm:** LightGBM. The baseline reaches R² ≈ 0.86 (RMSE ≈ 336 s, MAE ≈ 203 s).
+- **Registry:** every model is logged to MLflow. The production model is whichever version holds the **`Champion` alias**; the API loads it at startup.
+
+### 3. Serving
+
+FastAPI loads the Champion once (in the app lifespan) and serves `POST /predict`. After each response, a background task writes the input, prediction and model version to `prediction_logs` in PostgreSQL, so logging never slows down or breaks a prediction.
+
+### 4. Drift detection: three independent views
+
+A new batch of production data (for example, one month) is compared with the **reference data** the model was trained on:
+
+| Detector | Question it answers | How |
+|---|---|---|
+| **Statistical** | Do the inputs look different? | Per feature: **PSI** (Population Stability Index), **Kolmogorov–Smirnov** test, **Jensen–Shannon** distance |
+| **SHAP** | Is the model *reasoning* differently? | Compares mean \|SHAP\| feature importance on reference vs current data |
+| **Prediction** | Are the *outputs* shifting? | Compares the distributions of the model's predictions on both datasets |
+
+Using all three avoids false alarms. A feature can drift without hurting the model, and the model can change behaviour even when no single feature looks very different.
+
+### 5. Scoring and decision
+
+The three results are combined into one score from 0 to 1:
+
+```
+overall = 0.4 × statistical + 0.3 × SHAP + 0.3 × prediction
+```
+
+| Score | Action | Meaning |
+|---|---|---|
+| < 0.25 | `WAIT` | Nothing to do |
+| 0.25 – 0.5 | `MONITOR` | Keep an eye on it |
+| 0.5 – 0.75 | `ALERT` | Significant drift, a human should look |
+| ≥ 0.75 | `RETRAIN` | Retrain automatically |
+
+Every run is stored in `monitoring_runs` (scores, action, drifted features) and `drift_scores` (per-feature details).
+
+### 6. Retraining and the validation gates
+
+On `RETRAIN`, the orchestrator trains a **Challenger** on fresh data and compares it with the Champion on the **same frozen test set** (fixed rows, never used for training, so the comparison is fair). The Challenger must pass **every** gate:
+
+1. **Metric gate:** RMSE at least 1% better than the Champion, with MAE no worse and R² no worse.
+2. **Bootstrap gate:** the RMSE improvement must hold up under bootstrap resampling, not just be luck on one test sample.
+3. **Segment gate:** no important segment (top pickup zones, JFK, LaGuardia, Newark) may get more than 10% worse, so a better average can't hide a broken airport segment.
+4. **Recent-data gate:** on the most recent month, the Challenger may not be more than 10% worse than the Champion.
+
+If all gates pass, the MLflow `Champion` alias moves to the new version (**promote**). If any gate fails, the Challenger is **rejected** and production stays untouched. Either way, the full result and the reasons are written to `retraining_events`.
+
+### 7. The AI Assistant (RAG)
+
+Each monitoring run and retraining event is turned into a text document, embedded with NVIDIA embeddings and stored in **ChromaDB**. When you ask a question:
+
+1. The question is embedded and the closest documents are retrieved.
+2. Documents that aren't relevant enough (cosine distance above `RAG_MAX_DISTANCE`, 0.85 by default) are dropped, so the LLM is never fed unrelated context.
+3. The LLM answers **only from those documents** and cites them as `[Source n]`.
+
+So *"Why was the challenger rejected?"* is answered from the real retraining record (which gate failed and by how much), not invented. If the vector index is lost, it can be rebuilt from PostgreSQL with `python -m src.rag.rebuild_index`.
+
+### 8. Upload monitoring and the Stop button
+
+From the UI you can upload any month of raw TLC data. The API saves it to a private temporary folder, runs the full pipeline (validate → preprocess → three detectors → score → save → index), and deletes the temporary files afterwards. Only one run can execute at a time, since detection loads the full reference dataset.
+
+**Stop:** the run checks a stop flag between stages. When you press Stop, it ends at the next stage boundary and **nothing is saved**, because the final check happens before any database write.
+
+### 9. Security
+
+- API key (`X-API-Key`) on every endpoint except `/health`, including `/metrics`.
+- CORS allowlist (no `*`), upload size limit, and file-type and column validation.
+- Error messages to clients are generic; server logs are redacted (no keys or data).
+- In production, only Caddy (ports 80/443, HTTPS) is public. PostgreSQL, MLflow and the API are reachable only inside the Docker network.
+- Secrets live in `.env` / Streamlit secrets, never in git.
+
+### 10. Deployment
+
+- **Backend:** one AWS EC2 instance running Docker Compose (API, PostgreSQL, MLflow, Caddy). Caddy gets a free HTTPS certificate automatically through an `sslip.io` hostname.
+- **UI:** Streamlit Community Cloud, which calls the API over HTTPS with the key stored in Streamlit secrets.
+- **Cost control:** the instance is stopped when not in use and started on demand for demos.
+
+---
+
 ## Architecture
 
 ```mermaid
