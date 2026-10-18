@@ -4,7 +4,7 @@
 
 **🚀 Live demo:** [mohvijayjain-sentinel-ai-frontendapp-1pecn3.streamlit.app](https://mohvijayjain-sentinel-ai-frontendapp-1pecn3.streamlit.app/)
 
-> **Note:** the UI is always online, but the backend runs on AWS EC2 and is kept stopped to save cost. If the UI shows *Backend: Offline*, email **your.email@example.com** and I'll start it for you.
+> **Note:** the UI is always online, but the backend runs on AWS EC2 and is kept stopped to save cost. If the UI shows *Backend: Offline*, email **[mohvijayjain12@gmail.com](mailto:mohvijayjain12@gmail.com)** and I'll start it for you.
 
 ---
 
