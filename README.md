@@ -25,13 +25,13 @@ flowchart LR
     User([User / Interviewer])
 
     subgraph UI["Streamlit Community Cloud"]
-        ST[Streamlit UI<br/>Dashboard · Monitoring · Run · Retraining<br/>Predictions · AI Assistant]
+        ST[Streamlit UI<br/>Dashboard - Monitoring - Run - Retraining<br/>Predictions - AI Assistant]
     end
 
-    subgraph EC2["AWS EC2 · Docker Compose"]
+    subgraph EC2["AWS EC2 - Docker Compose"]
         CADDY[Caddy<br/>auto-HTTPS :443]
         API[FastAPI<br/>sentinel-api :8000]
-        PG[(PostgreSQL<br/>runs · scores · events · logs)]
+        PG[(PostgreSQL<br/>runs - scores - events - logs)]
         ML[MLflow<br/>tracking + model registry]
         CH[(ChromaDB<br/>RAG index)]
     end
@@ -59,18 +59,18 @@ Everything reaches the API through Caddy (`https://<host>/...` → `sentinel-api
 flowchart TD
     C[Caddy :443] --> APP[FastAPI app]
 
-    APP --> R1["Serving router · /"]
-    APP --> R2["Monitoring router · /monitoring 🔒"]
-    APP --> R3["RAG router · /chat 🔒"]
-    APP --> R4["/metrics 🔒 (Prometheus)"]
+    APP --> R1["Serving router - /"]
+    APP --> R2["Monitoring router - /monitoring (key)"]
+    APP --> R3["RAG router - /chat (key)"]
+    APP --> R4["/metrics (key) (Prometheus)"]
 
     R1 --> H["GET /health (public)"]
-    R1 --> P["POST /predict 🔒"]
-    R1 --> MI["GET /model/info 🔒"]
+    R1 --> P["POST /predict (key)"]
+    R1 --> MI["GET /model/info (key)"]
 
-    R2 --> L["GET /latest · /history"]
-    R2 --> F["GET /drifted-features · /feature-scores"]
-    R2 --> E["GET /retraining-events · /prediction-logs"]
+    R2 --> L["GET /latest - /history"]
+    R2 --> F["GET /drifted-features - /feature-scores"]
+    R2 --> E["GET /retraining-events - /prediction-logs"]
     R2 --> RUN["POST /run (upload dataset)"]
     R2 --> STOP["POST /run/stop"]
 
@@ -110,14 +110,14 @@ sequenceDiagram
 
     U->>UI: Upload dataset, click Run Monitoring
     UI->>API: POST /monitoring/run (file, period)
-    API->>PL: validate columns → preprocess
-    PL->>PL: statistical → SHAP → prediction drift
+    API->>PL: validate columns -> preprocess
+    PL->>PL: statistical -> SHAP -> prediction drift
     opt User clicks Stop
         UI->>API: POST /monitoring/run/stop
         API-->>PL: stop flag (checked between stages)
-        PL-->>UI: {"status": "stopped"} – nothing saved
+        PL-->>UI: {"status": "stopped"} - nothing saved
     end
-    PL->>PL: weighted drift score → action
+    PL->>PL: weighted drift score -> action
     PL->>DB: save run + feature scores, index for RAG
     API-->>UI: scores, action, drifted features
     alt action = RETRAIN
@@ -129,8 +129,8 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-    D[Drift score ≥ 0.75<br/>RETRAIN] --> T[Train Challenger<br/>LightGBM]
-    T --> G{Validation gates<br/>RMSE · MAE · R² · bootstrap<br/>segment · recent data}
+    D[Drift score >= 0.75<br/>RETRAIN] --> T[Train Challenger<br/>LightGBM]
+    T --> G{Validation gates<br/>RMSE - MAE - R2 - bootstrap<br/>segment - recent data}
     G -- all pass --> P[Promote: move MLflow<br/>Champion alias]
     G -- any fail --> R[Reject: keep Champion]
     P --> LOG[(retraining_events)]
