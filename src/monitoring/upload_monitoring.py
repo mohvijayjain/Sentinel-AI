@@ -239,6 +239,8 @@ def _run(file_path, reports_dir, *, model, file_name, label):
         prediction_score=scores["prediction_score"],
         overall_score=scores["overall_score"],
         action=scores["action"],
+        dataset=source,
+        drifted_features=drifted_features,
     )
 
     return {

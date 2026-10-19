@@ -119,7 +119,7 @@ flowchart LR
     User([User / Interviewer])
 
     subgraph UI["Streamlit Community Cloud"]
-        ST[Streamlit UI<br/>Dashboard - Monitoring - Run - Retraining<br/>Predictions - AI Assistant]
+        ST[Streamlit UI<br/>Dashboard - Monitoring - Run - Retraining<br/>Make a Prediction - Predictions - AI Assistant]
     end
 
     subgraph EC2["AWS EC2 - Docker Compose"]

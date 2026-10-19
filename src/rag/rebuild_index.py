@@ -129,6 +129,9 @@ def rebuild_index(engine=None) -> RebuildReport:
             prediction_score=row["prediction_score"],
             overall_score=row["overall_score"],
             action=row["action"],
+            dataset=row.get("report_path"),
+            run_time=row.get("run_time"),
+            drifted_features=row.get("drifted_features"),
         )
 
         (report.monitoring_runs_indexed if ok

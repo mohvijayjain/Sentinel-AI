@@ -149,3 +149,8 @@ def run_monitoring(file_name: str, content: bytes, period: str = "") -> ApiResul
 def stop_monitoring() -> ApiResult:
     """POST /monitoring/run/stop: ask the run in progress to stop."""
     return _request("POST", "/monitoring/run/stop")
+
+
+def predict(payload: dict) -> ApiResult:
+    """POST /predict: trip duration from the Champion model."""
+    return _request("POST", "/predict", json=payload)

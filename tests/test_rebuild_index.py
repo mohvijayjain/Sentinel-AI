@@ -465,3 +465,26 @@ def test_rebuilt_documents_are_retrievable(rebuild, embeddings, chroma_dir, db):
         "Monitoring Run 2 recommended action MONITOR")
 
     assert results[0]["id"] == "monitoring_run:2"
+
+
+def test_monitoring_document_names_the_dataset(updater):
+    """'Which dataset was run 13?' needs the dataset in the indexed text."""
+
+    document = updater.build_monitoring_document(
+        13, 0.5, 0.5, 0.0, 0.35, "MONITOR",
+        dataset="upload:yellow_tripdata_2026-06.parquet (June 2026)",
+        run_time="2026-10-12 10:00:00",
+        drifted_features="RatecodeID,PULocationID",
+    )
+
+    assert "Sentinel-AI Monitoring Run 13." in document
+    assert ("Dataset: uploaded file yellow_tripdata_2026-06.parquet "
+            "(June 2026).") in document
+    assert "Run time: 2026-10-12 10:00:00." in document
+    assert "Drifted features: RatecodeID, PULocationID." in document
+
+    batch = updater.build_monitoring_document(
+        1, 0, 0, 0, 0, "WAIT", dataset="reports/drift_summary.json",
+        drifted_features="")
+    assert "Dataset: batch monitoring pipeline (reports/drift_summary.json)." in batch
+    assert "Drifted features: none." in batch

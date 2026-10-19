@@ -48,6 +48,7 @@ pages = [
     st.Page("views/monitoring.py", title="Monitoring", icon="📈"),
     st.Page("views/run_monitoring.py", title="Run Monitoring", icon="📤"),
     st.Page("views/retraining.py", title="Retraining", icon="🔁"),
+    st.Page("views/predict.py", title="Make a Prediction", icon="🚕"),
     st.Page("views/predictions.py", title="Predictions", icon="🎯"),
     st.Page("views/assistant.py", title="AI Assistant", icon="🤖"),
 ]

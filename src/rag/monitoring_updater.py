@@ -50,15 +50,22 @@ def build_monitoring_document(
     prediction_score: float,
     overall_score: float,
     action: str,
+    dataset: Optional[str] = None,
+    run_time=None,
+    drifted_features=None,
 ) -> str:
     """
     Convert a monitoring result into searchable RAG text.
+
+    dataset (monitoring_runs.report_path), run_time and drifted_features
+    are optional context so questions like "which dataset was run 13?"
+    can be answered; omitted lines are simply left out.
 
     Pure function: no I/O. Scores are formatted to 3 decimals so the
     embedded text stays stable and readable regardless of float noise.
     """
 
-    return (
+    document = (
         f"Sentinel-AI Monitoring Run {run_id}.\n"
         f"Statistical drift score: {statistical_score:.3f}.\n"
         f"SHAP drift score: {shap_score:.3f}.\n"
@@ -66,6 +73,30 @@ def build_monitoring_document(
         f"Overall drift score: {overall_score:.3f}.\n"
         f"Recommended action: {action}."
     )
+
+    if dataset:
+        document += f"\nDataset: {describe_dataset(dataset)}."
+    if run_time:
+        document += f"\nRun time: {run_time}."
+    if drifted_features is not None:
+        if not isinstance(drifted_features, str):
+            drifted_features = ",".join(drifted_features)
+        names = [f.strip() for f in drifted_features.split(",") if f.strip()]
+        document += f"\nDrifted features: {', '.join(names) or 'none'}."
+
+    return document
+
+
+def describe_dataset(report_path: str) -> str:
+    """
+    Readable dataset name from monitoring_runs.report_path:
+    'upload:june.parquet (June 2026)' -> 'uploaded file june.parquet
+    (June 2026)'; anything else is the batch pipeline's report path.
+    """
+
+    if report_path.startswith("upload:"):
+        return "uploaded file " + report_path[len("upload:"):].strip()
+    return f"batch monitoring pipeline ({report_path})"
 
 
 # ============================================================
@@ -122,6 +153,9 @@ def upsert_monitoring_run(
     prediction_score: float,
     overall_score: float,
     action: str,
+    dataset: Optional[str] = None,
+    run_time=None,
+    drifted_features=None,
 ) -> bool:
     """
     Embed one monitoring run and upsert it into ChromaDB.
@@ -152,22 +186,27 @@ def upsert_monitoring_run(
             prediction_score=float(prediction_score),
             overall_score=float(overall_score),
             action=action,
+            dataset=dataset,
+            run_time=run_time,
+            drifted_features=drifted_features,
         )
 
         embedding = embed_passages([document])[0]
+
+        metadata = {
+            "source": "monitoring_runs",
+            "run_id": int(run_id),
+            "action": str(action),
+            "overall_score": float(overall_score),
+        }
+        if dataset:
+            metadata["dataset"] = str(dataset)
 
         _get_store().upsert_documents(
             documents=[document],
             embeddings=[embedding],
             ids=[f"monitoring_run:{run_id}"],
-            metadatas=[
-                {
-                    "source": "monitoring_runs",
-                    "run_id": int(run_id),
-                    "action": str(action),
-                    "overall_score": float(overall_score),
-                }
-            ],
+            metadatas=[metadata],
         )
 
         logger.info("Monitoring run indexed in ChromaDB: %s", run_id)
